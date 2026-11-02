@@ -66,13 +66,13 @@ RELAY builds on concepts established in earlier systems across Web3:
 | Component | Status | Verified Capabilities / Evidence |
 |---|---|---|
 | **Repository Scaffolding** | **Verified** | Cargo workspace linking `contract/` and `subaccount/`, npm scripts, WASM compilation. |
-| **NEP-171 Smart Contract Core** | **Verified** | Implements NEP-171 (Core), NEP-177 (Metadata), NEP-178 (Approval Management), NEP-181 (Enumeration) via `near-contract-standards` 5.30.0. 19 passing unit tests in `relay-contract`. |
-| **Sub-Account Controller Contract** | **Verified in Contract** | Companion contract `relay-subaccount` with strict parent-only dispatch, canonical initialization validation, typed bounded execution (`TransferNear`, `TransferNep171`), and `nft_on_transfer` custody receiver. 7 passing unit tests. |
-| **TOCTOU Transfer Coordination** | **Verified in Contract** | Generation-nonced `TokenLifecycle` locks token during sub-account execution and `nft_transfer_call`. Blocks `nft_transfer`, `nft_transfer_call`, subaccount operations, and credit consumption while locked. Stale callbacks safely ignored. |
-| **Canonical Sub-account Binding** | **Verified in Contract** | Deterministic canonical derivation enforced: `<token_id>.<contract_id>`. Rejects non-canonical or arbitrary external accounts. |
-| **Bidirectional Handshake Mechanism** | **Verified in Contract** | `AccountBinding` records `{ account_id, is_verified }`. Starts as `false` at mint; flips to `true` strictly when invoked by the sub-account itself via `relay_verify_associated_account`. Unauthorized callers rejected. |
-| **Consumable Credits Engine** | **Verified in Contract** | On-chain credit tracking (`total`, `remaining`). Only current NFT owner can consume credits; decrements atomically; enforces positive balance; blocked when token is locked. |
-| **Live Sub-Account Creation & Handshake** | **Unverified / Planned** | Requires testnet execution where parent account executes `CreateAccount` protocol action. Dry-run planned in `scripts/bootstrap.js`. |
+| **NEP-171 Smart Contract Core** | **Unit-Tested / Standards Wrapped** | Wraps `near-contract-standards` 5.30.0 Core, Metadata, Approval, and Enumeration with lifecycle checks. 26 passing unit tests in `relay-contract`. Full marketplace integration requires testnet validation. |
+| **Sub-Account Controller Contract** | **Unit-Tested in Contract** | Companion contract `relay-subaccount` with strict parent-only dispatch, canonical initialization validation, typed bounded execution (`TransferNear`, `TransferNep171`), storage reserve preservation, and `nft_on_transfer` custody receiver. 8 passing unit tests. |
+| **TOCTOU Transfer Coordination** | **Unit-Tested in Contract** | Generation-nonced `TokenLifecycle` locks token during sub-account execution and `nft_transfer_call`. Blocks `nft_transfer`, `nft_transfer_call`, approval changes, subaccount operations, and credit consumption while locked. Stale or unexpected callbacks safely ignored. |
+| **Canonical Sub-account Binding** | **Unit-Tested in Contract** | Deterministic canonical derivation enforced: `<token_id>.<contract_id>`. Rejects non-canonical or arbitrary external accounts. |
+| **Bidirectional Handshake Mechanism** | **Unit-Tested in Contract** | `AccountBinding` records `{ account_id, is_verified }`. Starts as `false` at mint; flips to `true` strictly when invoked by the sub-account itself via `relay_verify_associated_account`. Unauthorized callers rejected. |
+| **Consumable Credits Engine** | **Unit-Tested in Contract** | On-chain credit tracking (`total`, `remaining`). Only current NFT owner can consume credits; decrements atomically; enforces positive balance; blocked when token is locked. |
+| **Live Sub-Account Creation & Handshake** | **Unverified / Planned** | Requires live NEAR runtime where parent account executes protocol-level `CreateAccount` action. Dry-run planned in `scripts/bootstrap.js`. |
 | **Real Asset Continuity on Testnet** | **Unverified / Planned** | Unit tests prove simulated state and promise dispatch; live testnet integration proof required to demonstrate balance and child NFT preservation across owner rotation. |
 | **Google / NEAR Auth (FastAuth)** | **Planned** | MPC-based Google login session and transaction signing flow not yet integrated. |
 | **Web Frontend** | **Planned** | User interface for claiming, redeeming, and transferring. |
@@ -87,13 +87,13 @@ RELAY builds on concepts established in earlier systems across Web3:
 ### Build Contracts (WASM)
 ```bash
 npm run build
-# Compiles both relay_contract.wasm (354 KB) and relay_subaccount.wasm (131 KB)
+# Compiles both relay_contract.wasm (355 KB) and relay_subaccount.wasm (131 KB)
 ```
 
 ### Run Unit Tests
 ```bash
 npm test
-# Executes 26 automated unit tests (19 for relay-contract, 7 for relay-subaccount)
+# Executes 34 automated unit tests (26 for relay-contract, 8 for relay-subaccount)
 ```
 
 ### Dry-Run Deployment & Bootstrap Simulation

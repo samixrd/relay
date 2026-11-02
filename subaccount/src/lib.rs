@@ -129,9 +129,11 @@ impl SubaccountController {
                 receiver_id,
                 amount,
             } => {
+                let storage_reserve = env::storage_byte_cost().saturating_mul(env::storage_usage() as u128);
+                let available_balance = env::account_balance().saturating_sub(storage_reserve);
                 require!(
-                    env::account_balance() >= amount,
-                    "Insufficient native NEAR balance in sub-account"
+                    available_balance >= amount,
+                    "Insufficient available balance in sub-account (must preserve required storage reserve)"
                 );
                 Promise::new(receiver_id).transfer(amount).into()
             }
@@ -283,7 +285,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Insufficient native NEAR balance")]
+    #[should_panic(expected = "Insufficient available balance in sub-account (must preserve required storage reserve)")]
     fn test_execute_transfer_near_insufficient_balance() {
         let parent = accounts(0);
         let token_id = "relay-1".to_string();
@@ -303,6 +305,31 @@ mod tests {
         let _ = contract.execute(SubaccountAction::TransferNear {
             receiver_id: accounts(2),
             amount: NearToken::from_near(5),
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "Insufficient available balance in sub-account (must preserve required storage reserve)")]
+    fn test_execute_transfer_near_cannot_drain_storage_reserve() {
+        let parent = accounts(0);
+        let token_id = "relay-1".to_string();
+        let subaccount: AccountId = format!("{}.{}", token_id, parent).parse().unwrap();
+
+        let mut context = get_context(subaccount, parent.clone());
+        testing_env!(context
+            .account_balance(NearToken::from_near(1))
+            .build());
+        let mut contract = SubaccountController::new(parent.clone(), token_id);
+
+        // Attempt to transfer exactly 100% of the account balance (draining the storage stake)
+        testing_env!(context
+            .predecessor_account_id(parent)
+            .account_balance(NearToken::from_near(1))
+            .build());
+
+        let _ = contract.execute(SubaccountAction::TransferNear {
+            receiver_id: accounts(2),
+            amount: NearToken::from_near(1),
         });
     }
 
