@@ -1,0 +1,32 @@
+# Rust / WASM
+target/
+**/*.rs.bk
+*.wasm
+
+# Node.js
+node_modules/
+package-lock.json
+
+# NEAR
+neardev/
+*.wasm
+
+# Environment
+.env
+.env.local
+.env.production
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build output
+dist/
+build/
+out/

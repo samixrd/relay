@@ -1,0 +1,14 @@
+{
+  "name": "relay",
+  "version": "0.1.0",
+  "private": true,
+  "description": "RELAY — Stateful NFTs with associated NEAR accounts",
+  "scripts": {
+    "build:contract": "cd contract && cargo build --target wasm32-unknown-unknown --release",
+    "test:contract": "cd contract && cargo test",
+    "build": "npm run build:contract",
+    "test": "npm run test:contract"
+  },
+  "keywords": ["near", "nft", "relay"],
+  "license": "MIT"
+}
