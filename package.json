@@ -7,7 +7,8 @@
     "build:contract": "cd contract && cargo build --target wasm32-unknown-unknown --release",
     "test:contract": "cd contract && cargo test",
     "build": "npm run build:contract",
-    "test": "npm run test:contract"
+    "test": "npm run test:contract",
+    "plan:bootstrap": "node scripts/bootstrap.js"
   },
   "keywords": ["near", "nft", "relay"],
   "license": "MIT"

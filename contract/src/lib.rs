@@ -59,6 +59,10 @@ enum StorageKey {
 // RELAY-specific per-token data
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// RELAY-specific per-token data
+// ---------------------------------------------------------------------------
+
 /// On-chain credit state for a single RELAY token.
 #[near(serializers = [borsh, json])]
 #[derive(Clone, Debug, PartialEq)]
@@ -67,6 +71,18 @@ pub struct CreditState {
     pub total: u32,
     /// Credits remaining (decremented on each use).
     pub remaining: u32,
+}
+
+/// Token-bound account binding state for a RELAY token.
+#[near(serializers = [borsh, json])]
+#[derive(Clone, Debug, PartialEq)]
+pub struct AccountBinding {
+    /// The associated canonical NEAR sub-account ID (<token_id>.<contract_account_id>).
+    pub account_id: AccountId,
+    /// Whether the associated account has been verified on-chain.
+    /// Initialized to false at mint. Becomes true only when the associated sub-account
+    /// confirms its identity via a verified cross-contract handshake (`relay_verify_associated_account`).
+    pub is_verified: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -80,8 +96,8 @@ pub struct Contract {
     tokens: NonFungibleToken,
     /// Contract-level NFT metadata (NEP-177).
     metadata: LazyOption<NFTContractMetadata>,
-    /// Mapping: token_id → associated NEAR account ID.
-    associated_accounts: LookupMap<TokenId, AccountId>,
+    /// Mapping: token_id → associated NEAR account binding.
+    associated_accounts: LookupMap<TokenId, AccountBinding>,
     /// Mapping: token_id → credit state.
     credits: LookupMap<TokenId, CreditState>,
 }
@@ -132,12 +148,25 @@ impl Contract {
     // RELAY-specific methods
     // -----------------------------------------------------------------------
 
+    /// Derives the canonical sub-account ID for a given token ID.
+    /// The sub-account is strictly of the form: `<token_id>.<contract_account_id>`
+    pub fn relay_canonical_account_id(&self, token_id: &TokenId) -> AccountId {
+        require!(
+            !token_id.is_empty() && token_id.len() <= 32,
+            "Token ID length must be between 1 and 32 characters to form a valid sub-account"
+        );
+        let subaccount_candidate = format!("{}.{}", token_id, env::current_account_id());
+        subaccount_candidate.parse().unwrap_or_else(|_| {
+            env::panic_str("Token ID cannot form a valid NEAR account ID (must contain only lowercase alphanumeric, '-' or '_')")
+        })
+    }
+
     /// Mint a new RELAY NFT.
     ///
     /// - `token_id`: unique string identifier.
     /// - `token_owner_id`: initial owner.
     /// - `token_metadata`: NEP-177 metadata for the token.
-    /// - `associated_account_id`: the real NEAR account bound to this RELAY.
+    /// - `associated_account_id`: must match `relay_canonical_account_id(token_id)`.
     /// - `initial_credits`: number of consumable credits to grant.
     ///
     /// Only the contract owner (set during `new`) may call this.
@@ -156,9 +185,21 @@ impl Contract {
             "Only the contract owner can mint"
         );
 
-        // Store RELAY-specific data
-        self.associated_accounts
-            .insert(&token_id, &associated_account_id);
+        // Enforce canonical sub-account namespace binding
+        let canonical_account = self.relay_canonical_account_id(&token_id);
+        require!(
+            associated_account_id == canonical_account,
+            "associated_account_id must match canonical sub-account format: <token_id>.<contract_id>"
+        );
+
+        // Store RELAY-specific data (initialized as unverified pending on-chain handshake)
+        self.associated_accounts.insert(
+            &token_id,
+            &AccountBinding {
+                account_id: associated_account_id,
+                is_verified: false,
+            },
+        );
         self.credits.insert(
             &token_id,
             &CreditState {
@@ -174,7 +215,32 @@ impl Contract {
 
     /// View the associated NEAR account for a RELAY token.
     pub fn relay_associated_account(&self, token_id: TokenId) -> Option<AccountId> {
+        self.associated_accounts.get(&token_id).map(|b| b.account_id)
+    }
+
+    /// View the full account binding state for a RELAY token.
+    pub fn relay_account_binding(&self, token_id: TokenId) -> Option<AccountBinding> {
         self.associated_accounts.get(&token_id)
+    }
+
+    /// Called by the associated sub-account itself to establish bidirectional proof
+    /// that the sub-account is alive, deployed, and acknowledges this RELAY NFT.
+    pub fn relay_verify_associated_account(&mut self, token_id: TokenId) {
+        let binding = self
+            .associated_accounts
+            .get(&token_id)
+            .expect("Token not found");
+        require!(
+            env::predecessor_account_id() == binding.account_id,
+            "Only the associated sub-account itself can verify this binding"
+        );
+        self.associated_accounts.insert(
+            &token_id,
+            &AccountBinding {
+                account_id: binding.account_id,
+                is_verified: true,
+            },
+        );
     }
 
     /// View the credit state for a RELAY token.
@@ -392,12 +458,13 @@ mod tests {
             .predecessor_account_id(accounts(0))
             .build());
 
-        let associated: AccountId = "relay-1.testnet".parse().unwrap();
+        let token_id = "relay-1".to_string();
+        let canonical_account = contract.relay_canonical_account_id(&token_id);
         let token = contract.relay_mint(
-            "relay-1".to_string(),
+            token_id.clone(),
             accounts(0),
             sample_token_metadata(),
-            associated.clone(),
+            canonical_account.clone(),
             3,
         );
 
@@ -406,12 +473,124 @@ mod tests {
 
         // Verify RELAY extensions
         assert_eq!(
-            contract.relay_associated_account("relay-1".to_string()),
-            Some(associated)
+            contract.relay_associated_account(token_id.clone()),
+            Some(canonical_account.clone())
         );
-        let credits = contract.relay_credits("relay-1".to_string()).unwrap();
+
+        // Binding must initially be unverified (declared, but not yet verified on-chain)
+        let binding = contract.relay_account_binding(token_id.clone()).unwrap();
+        assert_eq!(binding.account_id, canonical_account);
+        assert!(!binding.is_verified);
+
+        let credits = contract.relay_credits(token_id).unwrap();
         assert_eq!(credits.total, 3);
         assert_eq!(credits.remaining, 3);
+    }
+
+    #[test]
+    #[should_panic(expected = "associated_account_id must match canonical sub-account format")]
+    fn test_mint_rejects_non_canonical_subaccount() {
+        let mut context = get_context(accounts(0));
+        testing_env!(context.build());
+        let mut contract = Contract::new_default_meta(accounts(0));
+
+        testing_env!(context
+            .storage_usage(env::storage_usage())
+            .attached_deposit(MINT_STORAGE_COST)
+            .predecessor_account_id(accounts(0))
+            .build());
+
+        // Attempt to pass an arbitrary external account instead of canonical sub-account
+        let fake_associated: AccountId = "binance.near".parse().unwrap();
+        contract.relay_mint(
+            "relay-1".to_string(),
+            accounts(0),
+            sample_token_metadata(),
+            fake_associated,
+            3,
+        );
+    }
+
+    #[test]
+    fn test_verify_associated_account_handshake() {
+        let mut context = get_context(accounts(0));
+        testing_env!(context.build());
+        let mut contract = Contract::new_default_meta(accounts(0));
+
+        testing_env!(context
+            .storage_usage(env::storage_usage())
+            .attached_deposit(MINT_STORAGE_COST)
+            .predecessor_account_id(accounts(0))
+            .build());
+
+        let token_id = "relay-1".to_string();
+        let canonical_account = contract.relay_canonical_account_id(&token_id);
+        contract.relay_mint(
+            token_id.clone(),
+            accounts(0),
+            sample_token_metadata(),
+            canonical_account.clone(),
+            3,
+        );
+
+        assert!(!contract.relay_account_binding(token_id.clone()).unwrap().is_verified);
+
+        // Associated sub-account executes the verification handshake call
+        testing_env!(context
+            .storage_usage(env::storage_usage())
+            .attached_deposit(NearToken::from_near(0))
+            .predecessor_account_id(canonical_account)
+            .build());
+
+        contract.relay_verify_associated_account(token_id.clone());
+
+        // Now verified on-chain!
+        let binding = contract.relay_account_binding(token_id).unwrap();
+        assert!(binding.is_verified);
+    }
+
+    #[test]
+    #[should_panic(expected = "Only the associated sub-account itself can verify this binding")]
+    fn test_verify_associated_account_unauthorized() {
+        let mut context = get_context(accounts(0));
+        testing_env!(context.build());
+        let mut contract = Contract::new_default_meta(accounts(0));
+
+        testing_env!(context
+            .storage_usage(env::storage_usage())
+            .attached_deposit(MINT_STORAGE_COST)
+            .predecessor_account_id(accounts(0))
+            .build());
+
+        let token_id = "relay-1".to_string();
+        let canonical_account = contract.relay_canonical_account_id(&token_id);
+        contract.relay_mint(
+            token_id.clone(),
+            accounts(0),
+            sample_token_metadata(),
+            canonical_account,
+            3,
+        );
+
+        // Contract owner or another user (accounts(0)) tries to fake verification handshake
+        testing_env!(context
+            .storage_usage(env::storage_usage())
+            .attached_deposit(NearToken::from_near(0))
+            .predecessor_account_id(accounts(0))
+            .build());
+
+        contract.relay_verify_associated_account(token_id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Token ID cannot form a valid NEAR account ID")]
+    fn test_invalid_token_id_characters() {
+        let context = get_context(accounts(0));
+        testing_env!(context.build());
+        let contract = Contract::new_default_meta(accounts(0));
+
+        // Upper case and spaces are illegal in NEAR account IDs
+        contract.relay_canonical_account_id(&"RELAY #1".to_string());
     }
 
     #[test]
@@ -426,12 +605,13 @@ mod tests {
             .predecessor_account_id(accounts(0))
             .build());
 
-        let associated: AccountId = "relay-1.testnet".parse().unwrap();
+        let token_id = "relay-1".to_string();
+        let canonical = contract.relay_canonical_account_id(&token_id);
         contract.relay_mint(
-            "relay-1".to_string(),
+            token_id.clone(),
             accounts(0),
             sample_token_metadata(),
-            associated,
+            canonical,
             3,
         );
 
@@ -442,9 +622,9 @@ mod tests {
             .predecessor_account_id(accounts(0))
             .build());
 
-        contract.relay_use_credit("relay-1".to_string());
+        contract.relay_use_credit(token_id.clone());
 
-        let credits = contract.relay_credits("relay-1".to_string()).unwrap();
+        let credits = contract.relay_credits(token_id).unwrap();
         assert_eq!(credits.remaining, 2);
     }
 
@@ -461,12 +641,13 @@ mod tests {
             .predecessor_account_id(accounts(0))
             .build());
 
-        let associated: AccountId = "relay-1.testnet".parse().unwrap();
+        let token_id = "relay-1".to_string();
+        let canonical = contract.relay_canonical_account_id(&token_id);
         contract.relay_mint(
-            "relay-1".to_string(),
+            token_id.clone(),
             accounts(0),
             sample_token_metadata(),
-            associated,
+            canonical,
             3,
         );
 
@@ -477,7 +658,7 @@ mod tests {
             .predecessor_account_id(accounts(1))
             .build());
 
-        contract.relay_use_credit("relay-1".to_string());
+        contract.relay_use_credit(token_id);
     }
 
     #[test]
@@ -493,12 +674,13 @@ mod tests {
             .predecessor_account_id(accounts(0))
             .build());
 
-        let associated: AccountId = "relay-1.testnet".parse().unwrap();
+        let token_id = "relay-1".to_string();
+        let canonical = contract.relay_canonical_account_id(&token_id);
         contract.relay_mint(
-            "relay-1".to_string(),
+            token_id.clone(),
             accounts(0),
             sample_token_metadata(),
-            associated.clone(),
+            canonical.clone(),
             3,
         );
 
@@ -508,7 +690,7 @@ mod tests {
             .attached_deposit(NearToken::from_near(0))
             .predecessor_account_id(accounts(0))
             .build());
-        contract.relay_use_credit("relay-1".to_string());
+        contract.relay_use_credit(token_id.clone());
 
         // Transfer to accounts(1)
         testing_env!(context
@@ -516,7 +698,7 @@ mod tests {
             .attached_deposit(NearToken::from_yoctonear(1))
             .predecessor_account_id(accounts(0))
             .build());
-        contract.nft_transfer(accounts(1), "relay-1".to_string(), None, None);
+        contract.nft_transfer(accounts(1), token_id.clone(), None, None);
 
         // Verify token now owned by accounts(1)
         testing_env!(context
@@ -525,15 +707,15 @@ mod tests {
             .attached_deposit(NearToken::from_near(0))
             .build());
 
-        let token = contract.nft_token("relay-1".to_string()).unwrap();
+        let token = contract.nft_token(token_id.clone()).unwrap();
         assert_eq!(token.owner_id, accounts(1));
 
         // Associated account and credits preserved
         assert_eq!(
-            contract.relay_associated_account("relay-1".to_string()),
-            Some(associated)
+            contract.relay_associated_account(token_id.clone()),
+            Some(canonical)
         );
-        let credits = contract.relay_credits("relay-1".to_string()).unwrap();
+        let credits = contract.relay_credits(token_id).unwrap();
         assert_eq!(credits.total, 3);
         assert_eq!(credits.remaining, 2); // 1 was used before transfer
     }
@@ -551,12 +733,13 @@ mod tests {
             .predecessor_account_id(accounts(0))
             .build());
 
-        let associated: AccountId = "relay-1.testnet".parse().unwrap();
+        let token_id = "relay-1".to_string();
+        let canonical = contract.relay_canonical_account_id(&token_id);
         contract.relay_mint(
-            "relay-1".to_string(),
+            token_id.clone(),
             accounts(0),
             sample_token_metadata(),
-            associated,
+            canonical,
             1, // Only 1 credit
         );
 
@@ -567,9 +750,9 @@ mod tests {
             .build());
 
         // Use the only credit
-        contract.relay_use_credit("relay-1".to_string());
+        contract.relay_use_credit(token_id.clone());
 
         // Try to use again → should panic
-        contract.relay_use_credit("relay-1".to_string());
+        contract.relay_use_credit(token_id);
     }
 }
