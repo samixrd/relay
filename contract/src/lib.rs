@@ -54,7 +54,8 @@ enum StorageKey {
     Approval,
     AssociatedAccounts,
     Credits,
-    LockedTokens,
+    TokenLifecycles,
+    TokenNonces,
 }
 
 // ---------------------------------------------------------------------------
@@ -81,6 +82,24 @@ pub struct AccountBinding {
     /// Initialized to false at mint. Becomes true only when the associated sub-account
     /// confirms its identity via a verified cross-contract handshake (`relay_verify_associated_account`).
     pub is_verified: bool,
+}
+
+/// Lifecycle state of a RELAY token across asynchronous operations and transfers.
+#[near(serializers = [borsh, json])]
+#[derive(Clone, Debug, PartialEq)]
+pub enum TokenLifecycle {
+    /// Token is unlocked and available for transfers, operations, and credit consumption.
+    Unlocked,
+    /// Token has an active in-flight sub-account operation with the given generation nonce.
+    LockedForSubaccount {
+        nonce: u64,
+    },
+    /// Token is awaiting asynchronous receiver resolution in an NEP-171 `nft_transfer_call`.
+    LockedForTransferCall {
+        nonce: u64,
+        previous_owner_id: AccountId,
+        receiver_id: AccountId,
+    },
 }
 
 /// Typed, bounded operations that an authorized RELAY owner can execute via the associated sub-account.
@@ -120,8 +139,10 @@ pub struct Contract {
     associated_accounts: LookupMap<TokenId, AccountBinding>,
     /// Mapping: token_id → credit state.
     credits: LookupMap<TokenId, CreditState>,
-    /// Mapping: token_id → is_locked (prevents TOCTOU transfer during in-flight operations).
-    locked_tokens: LookupMap<TokenId, bool>,
+    /// Mapping: token_id → lifecycle lock state (prevents TOCTOU transfer during in-flight operations).
+    token_lifecycles: LookupMap<TokenId, TokenLifecycle>,
+    /// Mapping: token_id → monotonic generation nonce for operation isolation.
+    token_nonces: LookupMap<TokenId, u64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -146,7 +167,8 @@ impl Contract {
             metadata: LazyOption::new(StorageKey::Metadata, Some(&metadata)),
             associated_accounts: LookupMap::new(StorageKey::AssociatedAccounts),
             credits: LookupMap::new(StorageKey::Credits),
-            locked_tokens: LookupMap::new(StorageKey::LockedTokens),
+            token_lifecycles: LookupMap::new(StorageKey::TokenLifecycles),
+            token_nonces: LookupMap::new(StorageKey::TokenNonces),
         }
     }
 
@@ -276,7 +298,10 @@ impl Contract {
     /// Only the current owner of the token may call this.
     /// Panics if no credits remain.
     pub fn relay_use_credit(&mut self, token_id: TokenId) {
-        // Verify the caller owns the token
+        require!(
+            self.token_lifecycle(&token_id) == TokenLifecycle::Unlocked,
+            "Cannot use credits while token is locked pending an operation or transfer"
+        );
         let token = self
             .tokens
             .nft_token(token_id.clone())
@@ -294,9 +319,21 @@ impl Contract {
         self.credits.insert(&token_id, &state);
     }
 
-    /// Returns true if the token is currently locked due to an active in-flight sub-account operation.
+    /// Returns the lifecycle lock state for a given token.
+    pub fn token_lifecycle(&self, token_id: &TokenId) -> TokenLifecycle {
+        self.token_lifecycles
+            .get(token_id)
+            .unwrap_or(TokenLifecycle::Unlocked)
+    }
+
+    /// Returns true if the token is currently locked due to an active in-flight operation or transfer.
     pub fn is_token_locked(&self, token_id: &TokenId) -> bool {
-        self.locked_tokens.get(token_id).unwrap_or(false)
+        self.token_lifecycle(token_id) != TokenLifecycle::Unlocked
+    }
+
+    /// Returns the current operation generation nonce for a given token.
+    pub fn token_nonce(&self, token_id: &TokenId) -> u64 {
+        self.token_nonces.get(token_id).unwrap_or(0)
     }
 
     /// Dispatches a typed operation to the token's associated sub-account.
@@ -313,8 +350,8 @@ impl Contract {
             "Only current token owner can execute operations on associated sub-account"
         );
         require!(
-            !self.is_token_locked(&token_id),
-            "Token is currently locked pending another operation"
+            self.token_lifecycle(&token_id) == TokenLifecycle::Unlocked,
+            "Token is currently locked pending another operation or transfer"
         );
         let binding = self
             .associated_accounts
@@ -325,8 +362,13 @@ impl Contract {
             "Associated sub-account has not completed on-chain verification handshake"
         );
 
-        // Lock token to eliminate TOCTOU race: no ownership transfer can occur while operation is in flight
-        self.locked_tokens.insert(&token_id, &true);
+        // Advance monotonic generation nonce and lock token
+        let next_nonce = self.token_nonce(&token_id) + 1;
+        self.token_nonces.insert(&token_id, &next_nonce);
+        self.token_lifecycles.insert(
+            &token_id,
+            &TokenLifecycle::LockedForSubaccount { nonce: next_nonce },
+        );
 
         ext_subaccount::ext(binding.account_id)
             .with_static_gas(Gas::from_tgas(30))
@@ -334,19 +376,26 @@ impl Contract {
             .then(
                 Self::ext(env::current_account_id())
                     .with_static_gas(Gas::from_tgas(10))
-                    .on_subaccount_executed(token_id),
+                    .on_subaccount_executed(token_id, next_nonce),
             )
     }
 
     /// Callback invoked when the sub-account operation completes.
-    /// Always releases the token lock to prevent permanent deadlock, regardless of execution success or failure.
+    /// Releases the lock ONLY if the current lock generation nonce matches expected_nonce.
+    /// Stale or duplicate callbacks are safely ignored without altering newer state.
     #[private]
     pub fn on_subaccount_executed(
         &mut self,
         token_id: TokenId,
+        expected_nonce: u64,
         #[callback_result] result: Result<bool, near_sdk::PromiseError>,
     ) -> bool {
-        self.locked_tokens.insert(&token_id, &false);
+        if let TokenLifecycle::LockedForSubaccount { nonce } = self.token_lifecycle(&token_id) {
+            if nonce == expected_nonce {
+                self.token_lifecycles
+                    .insert(&token_id, &TokenLifecycle::Unlocked);
+            }
+        }
         result.unwrap_or(false)
     }
 }
@@ -366,8 +415,8 @@ impl NonFungibleTokenCore for Contract {
         memo: Option<String>,
     ) {
         require!(
-            !self.is_token_locked(&token_id),
-            "Token is currently locked pending an active sub-account operation"
+            self.token_lifecycle(&token_id) == TokenLifecycle::Unlocked,
+            "Cannot transfer token while an operation or transfer is pending"
         );
         self.tokens
             .nft_transfer(receiver_id, token_id, approval_id, memo);
@@ -383,9 +432,25 @@ impl NonFungibleTokenCore for Contract {
         msg: String,
     ) -> PromiseOrValue<bool> {
         require!(
-            !self.is_token_locked(&token_id),
-            "Token is currently locked pending an active sub-account operation"
+            self.token_lifecycle(&token_id) == TokenLifecycle::Unlocked,
+            "Cannot transfer token while an operation or transfer is pending"
         );
+
+        let token = self.tokens.nft_token(token_id.clone()).expect("Token not found");
+        let previous_owner_id = token.owner_id;
+
+        // Advance nonce and lock token in LockedForTransferCall state
+        let next_nonce = self.token_nonce(&token_id) + 1;
+        self.token_nonces.insert(&token_id, &next_nonce);
+        self.token_lifecycles.insert(
+            &token_id,
+            &TokenLifecycle::LockedForTransferCall {
+                nonce: next_nonce,
+                previous_owner_id,
+                receiver_id: receiver_id.clone(),
+            },
+        );
+
         self.tokens
             .nft_transfer_call(receiver_id, token_id, approval_id, memo, msg)
     }
@@ -409,12 +474,27 @@ impl NonFungibleTokenResolver for Contract {
         token_id: TokenId,
         approved_account_ids: Option<HashMap<AccountId, u64>>,
     ) -> bool {
-        self.tokens.nft_resolve_transfer(
-            previous_owner_id,
-            receiver_id,
-            token_id,
+        let is_refunded = self.tokens.nft_resolve_transfer(
+            previous_owner_id.clone(),
+            receiver_id.clone(),
+            token_id.clone(),
             approved_account_ids,
-        )
+        );
+
+        // Safely release the LockedForTransferCall lock upon resolution
+        if let TokenLifecycle::LockedForTransferCall {
+            nonce: _,
+            previous_owner_id: ref expected_prev,
+            receiver_id: ref expected_recv,
+        } = self.token_lifecycle(&token_id)
+        {
+            if expected_prev == &previous_owner_id && expected_recv == &receiver_id {
+                self.token_lifecycles
+                    .insert(&token_id, &TokenLifecycle::Unlocked);
+            }
+        }
+
+        is_refunded
     }
 }
 
@@ -502,8 +582,10 @@ impl NonFungibleTokenMetadataProvider for Contract {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
+    #[allow(deprecated)]
+    use near_sdk::test_utils::testing_env_with_promise_results;
     use near_sdk::test_utils::{accounts, VMContextBuilder};
-    use near_sdk::{testing_env, NearToken};
+    use near_sdk::{testing_env, NearToken, PromiseResult};
 
     const MINT_STORAGE_COST: NearToken = NearToken::from_yoctonear(7000000000000000000000u128);
 
@@ -922,8 +1004,8 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Token is currently locked pending an active sub-account operation")]
-    fn test_locked_token_prevents_transfer() {
+    #[should_panic(expected = "Cannot transfer token while an operation or transfer is pending")]
+    fn test_direct_transfer_blocked_while_subaccount_pending() {
         let mut context = get_context(accounts(0));
         testing_env!(context.build());
         let mut contract = Contract::new_default_meta(accounts(0));
@@ -944,11 +1026,11 @@ mod tests {
             3,
         );
 
-        // Simulate lock in place (e.g. while sub-account operation is in-flight)
-        contract.locked_tokens.insert(&token_id, &true);
+        // Sub-account operation is in-flight (nonce 1)
+        contract.token_lifecycles.insert(&token_id, &TokenLifecycle::LockedForSubaccount { nonce: 1 });
         assert!(contract.is_token_locked(&token_id));
 
-        // Transfer must be blocked to prevent TOCTOU race
+        // Direct transfer must be blocked to prevent TOCTOU race
         testing_env!(context
             .storage_usage(env::storage_usage())
             .attached_deposit(NearToken::from_yoctonear(1))
@@ -959,7 +1041,93 @@ mod tests {
     }
 
     #[test]
-    fn test_on_subaccount_executed_releases_lock() {
+    #[should_panic(expected = "Cannot transfer token while an operation or transfer is pending")]
+    fn test_transfer_call_blocked_while_subaccount_pending() {
+        let mut context = get_context(accounts(0));
+        testing_env!(context.build());
+        let mut contract = Contract::new_default_meta(accounts(0));
+
+        testing_env!(context
+            .storage_usage(env::storage_usage())
+            .attached_deposit(MINT_STORAGE_COST)
+            .predecessor_account_id(accounts(0))
+            .build());
+
+        let token_id = "relay-1".to_string();
+        let canonical = contract.relay_canonical_account_id(&token_id);
+        contract.relay_mint(
+            token_id.clone(),
+            accounts(0),
+            sample_token_metadata(),
+            canonical,
+            3,
+        );
+
+        // Sub-account operation is in-flight
+        contract.token_lifecycles.insert(&token_id, &TokenLifecycle::LockedForSubaccount { nonce: 1 });
+
+        // nft_transfer_call must be blocked
+        testing_env!(context
+            .storage_usage(env::storage_usage())
+            .attached_deposit(NearToken::from_yoctonear(1))
+            .predecessor_account_id(accounts(0))
+            .build());
+
+        let _ = contract.nft_transfer_call(accounts(1), token_id, None, None, "msg".to_string());
+    }
+
+    #[test]
+    #[should_panic(expected = "Token is currently locked pending another operation or transfer")]
+    fn test_subaccount_op_blocked_while_transfer_call_pending() {
+        let mut context = get_context(accounts(0));
+        testing_env!(context.build());
+        let mut contract = Contract::new_default_meta(accounts(0));
+
+        testing_env!(context
+            .storage_usage(env::storage_usage())
+            .attached_deposit(MINT_STORAGE_COST)
+            .predecessor_account_id(accounts(0))
+            .build());
+
+        let token_id = "relay-1".to_string();
+        let canonical = contract.relay_canonical_account_id(&token_id);
+        contract.relay_mint(
+            token_id.clone(),
+            accounts(0),
+            sample_token_metadata(),
+            canonical,
+            3,
+        );
+
+        // Token is locked in LockedForTransferCall state
+        contract.token_lifecycles.insert(
+            &token_id,
+            &TokenLifecycle::LockedForTransferCall {
+                nonce: 1,
+                previous_owner_id: accounts(0),
+                receiver_id: accounts(1),
+            },
+        );
+
+        // Sub-account operation must be rejected
+        testing_env!(context
+            .storage_usage(env::storage_usage())
+            .attached_deposit(NearToken::from_near(0))
+            .predecessor_account_id(accounts(0))
+            .build());
+
+        let _ = contract.relay_execute_subaccount(
+            token_id,
+            SubaccountAction::TransferNear {
+                receiver_id: accounts(2),
+                amount: NearToken::from_near(1),
+            },
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot use credits while token is locked pending an operation or transfer")]
+    fn test_use_credit_blocked_while_locked() {
         let mut context = get_context(accounts(0));
         testing_env!(context.build());
         let mut contract = Contract::new_default_meta(accounts(0));
@@ -981,18 +1149,199 @@ mod tests {
         );
 
         // Lock token
-        contract.locked_tokens.insert(&token_id, &true);
+        contract.token_lifecycles.insert(&token_id, &TokenLifecycle::LockedForSubaccount { nonce: 1 });
+
+        // Credit consumption must be blocked
+        testing_env!(context
+            .storage_usage(env::storage_usage())
+            .attached_deposit(NearToken::from_near(0))
+            .predecessor_account_id(accounts(0))
+            .build());
+
+        contract.relay_use_credit(token_id);
+    }
+
+    #[test]
+    fn test_on_subaccount_executed_releases_matching_nonce() {
+        let mut context = get_context(accounts(0));
+        testing_env!(context.build());
+        let mut contract = Contract::new_default_meta(accounts(0));
+
+        testing_env!(context
+            .storage_usage(env::storage_usage())
+            .attached_deposit(MINT_STORAGE_COST)
+            .predecessor_account_id(accounts(0))
+            .build());
+
+        let token_id = "relay-1".to_string();
+        let canonical = contract.relay_canonical_account_id(&token_id);
+        contract.relay_mint(
+            token_id.clone(),
+            accounts(0),
+            sample_token_metadata(),
+            canonical,
+            3,
+        );
+
+        // Lock with nonce 5
+        contract.token_lifecycles.insert(&token_id, &TokenLifecycle::LockedForSubaccount { nonce: 5 });
         assert!(contract.is_token_locked(&token_id));
 
-        // Callback from NEAR runtime (predecessor is contract itself)
+        // Callback with matching nonce 5
         testing_env!(context
             .storage_usage(env::storage_usage())
             .predecessor_account_id(accounts(0))
             .build());
 
-        // Even with failed promise, lock MUST be released
-        let unlocked = contract.on_subaccount_executed(token_id.clone(), Result::Ok(true));
+        let unlocked = contract.on_subaccount_executed(token_id.clone(), 5, Result::Ok(true));
         assert!(unlocked);
         assert!(!contract.is_token_locked(&token_id));
+        assert_eq!(contract.token_lifecycle(&token_id), TokenLifecycle::Unlocked);
+    }
+
+    #[test]
+    fn test_stale_callback_does_not_release_newer_lock() {
+        let mut context = get_context(accounts(0));
+        testing_env!(context.build());
+        let mut contract = Contract::new_default_meta(accounts(0));
+
+        testing_env!(context
+            .storage_usage(env::storage_usage())
+            .attached_deposit(MINT_STORAGE_COST)
+            .predecessor_account_id(accounts(0))
+            .build());
+
+        let token_id = "relay-1".to_string();
+        let canonical = contract.relay_canonical_account_id(&token_id);
+        contract.relay_mint(
+            token_id.clone(),
+            accounts(0),
+            sample_token_metadata(),
+            canonical,
+            3,
+        );
+
+        // Current lock is at generation nonce 2
+        contract.token_lifecycles.insert(&token_id, &TokenLifecycle::LockedForSubaccount { nonce: 2 });
+
+        // Stale callback arrives for previous generation nonce 1
+        testing_env!(context
+            .storage_usage(env::storage_usage())
+            .predecessor_account_id(accounts(0))
+            .build());
+
+        let res = contract.on_subaccount_executed(token_id.clone(), 1, Result::Ok(true));
+        assert!(res);
+        // CRITICAL: Token must STILL be locked for nonce 2!
+        assert!(contract.is_token_locked(&token_id));
+        assert_eq!(
+            contract.token_lifecycle(&token_id),
+            TokenLifecycle::LockedForSubaccount { nonce: 2 }
+        );
+    }
+
+    #[test]
+    fn test_resolve_transfer_unlocks_state() {
+        let mut context = get_context(accounts(0));
+        testing_env!(context.build());
+        let mut contract = Contract::new_default_meta(accounts(0));
+
+        testing_env!(context
+            .storage_usage(env::storage_usage())
+            .attached_deposit(MINT_STORAGE_COST)
+            .predecessor_account_id(accounts(0))
+            .build());
+
+        let token_id = "relay-1".to_string();
+        let canonical = contract.relay_canonical_account_id(&token_id);
+        contract.relay_mint(
+            token_id.clone(),
+            accounts(0),
+            sample_token_metadata(),
+            canonical,
+            3,
+        );
+
+        // Simulate LockedForTransferCall state
+        contract.token_lifecycles.insert(
+            &token_id,
+            &TokenLifecycle::LockedForTransferCall {
+                nonce: 1,
+                previous_owner_id: accounts(0),
+                receiver_id: accounts(1),
+            },
+        );
+        assert!(contract.is_token_locked(&token_id));
+
+        // Resolver invoked by contract itself with promise result from receiver (false = keep transfer, don't rollback)
+        #[allow(deprecated)]
+        testing_env_with_promise_results(
+            context
+                .storage_usage(env::storage_usage())
+                .predecessor_account_id(accounts(0))
+                .build(),
+            PromiseResult::Successful(b"false".to_vec()),
+        );
+
+        contract.nft_resolve_transfer(accounts(0), accounts(1), token_id.clone(), None);
+
+        // Token must be unlocked after resolution
+        assert!(!contract.is_token_locked(&token_id));
+        assert_eq!(contract.token_lifecycle(&token_id), TokenLifecycle::Unlocked);
+    }
+
+    #[test]
+    #[should_panic(expected = "Only current token owner can execute operations")]
+    fn test_previous_owner_cannot_execute_after_transfer() {
+        let mut context = get_context(accounts(0));
+        testing_env!(context.build());
+        let mut contract = Contract::new_default_meta(accounts(0));
+
+        testing_env!(context
+            .storage_usage(env::storage_usage())
+            .attached_deposit(MINT_STORAGE_COST)
+            .predecessor_account_id(accounts(0))
+            .build());
+
+        let token_id = "relay-1".to_string();
+        let canonical = contract.relay_canonical_account_id(&token_id);
+        contract.relay_mint(
+            token_id.clone(),
+            accounts(0),
+            sample_token_metadata(),
+            canonical.clone(),
+            3,
+        );
+
+        // Verification handshake
+        testing_env!(context
+            .storage_usage(env::storage_usage())
+            .attached_deposit(NearToken::from_near(0))
+            .predecessor_account_id(canonical)
+            .build());
+        contract.relay_verify_associated_account(token_id.clone());
+
+        // Transfer token from accounts(0) to accounts(1)
+        testing_env!(context
+            .storage_usage(env::storage_usage())
+            .attached_deposit(NearToken::from_yoctonear(1))
+            .predecessor_account_id(accounts(0))
+            .build());
+        contract.nft_transfer(accounts(1), token_id.clone(), None, None);
+
+        // Previous owner accounts(0) attempts to execute on the sub-account
+        testing_env!(context
+            .storage_usage(env::storage_usage())
+            .attached_deposit(NearToken::from_near(0))
+            .predecessor_account_id(accounts(0))
+            .build());
+
+        let _ = contract.relay_execute_subaccount(
+            token_id,
+            SubaccountAction::TransferNear {
+                receiver_id: accounts(0),
+                amount: NearToken::from_near(1),
+            },
+        );
     }
 }
