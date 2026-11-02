@@ -4,10 +4,12 @@
   "private": true,
   "description": "RELAY — Stateful NFTs with associated NEAR accounts",
   "scripts": {
-    "build:contract": "cd contract && cargo build --target wasm32-unknown-unknown --release",
-    "test:contract": "cd contract && cargo test",
-    "build": "npm run build:contract",
-    "test": "npm run test:contract",
+    "build:contract": "cargo build -p relay-contract --target wasm32-unknown-unknown --release",
+    "build:subaccount": "cargo build -p relay-subaccount --target wasm32-unknown-unknown --release",
+    "build": "cargo build --target wasm32-unknown-unknown --release",
+    "test:contract": "cargo test -p relay-contract",
+    "test:subaccount": "cargo test -p relay-subaccount",
+    "test": "cargo test",
     "plan:bootstrap": "node scripts/bootstrap.js"
   },
   "keywords": ["near", "nft", "relay"],

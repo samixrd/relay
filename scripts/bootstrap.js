@@ -17,7 +17,20 @@
 const fs = require('fs');
 const path = require('path');
 
-const WASM_PATH = path.resolve(__dirname, '../contract/target/wasm32-unknown-unknown/release/relay_contract.wasm');
+function findWasm(filename) {
+    const candidatePaths = [
+        path.resolve(__dirname, `../target/wasm32-unknown-unknown/release/${filename}`),
+        path.resolve(__dirname, `../contract/target/wasm32-unknown-unknown/release/${filename}`),
+        path.resolve(__dirname, `../subaccount/target/wasm32-unknown-unknown/release/${filename}`)
+    ];
+    for (const p of candidatePaths) {
+        if (fs.existsSync(p)) return p;
+    }
+    return candidatePaths[0];
+}
+
+const RELAY_WASM = findWasm('relay_contract.wasm');
+const SUBACCOUNT_WASM = findWasm('relay_subaccount.wasm');
 
 function main() {
     const args = process.argv.slice(2);
@@ -30,15 +43,22 @@ function main() {
 
     // 1. Artifact Verification
     console.log('1. Checking compiled contract artifacts:');
-    if (fs.existsSync(WASM_PATH)) {
-        const stats = fs.statSync(WASM_PATH);
-        console.log(`   [OK] Contract binary found at: ${WASM_PATH}`);
-        console.log(`   [OK] Binary size: ${(stats.size / 1024).toFixed(2)} KB\n`);
-    } else {
-        console.error(`   [FAIL] Contract binary not found at ${WASM_PATH}`);
-        console.error('   Run "npm run build" first.\n');
+    let allFound = true;
+    for (const [name, p] of [['RELAY Core Contract', RELAY_WASM], ['Sub-Account Controller', SUBACCOUNT_WASM]]) {
+        if (fs.existsSync(p)) {
+            const stats = fs.statSync(p);
+            console.log(`   [OK] ${name}: ${p}`);
+            console.log(`        Binary size: ${(stats.size / 1024).toFixed(2)} KB`);
+        } else {
+            console.error(`   [FAIL] ${name} not found at ${p}`);
+            allFound = false;
+        }
+    }
+    if (!allFound) {
+        console.error('\n   Run "npm run build" first.\n');
         process.exit(1);
     }
+    console.log();
 
     // 2. Configuration Verification
     console.log('2. Validating environment configuration:');
@@ -71,17 +91,19 @@ function main() {
     // 4. Execution Plan (Dry-Run by default)
     console.log('4. Execution Plan:');
     console.log('   [PLAN] Step 4.1: Deploy relay_contract.wasm to ' + effectiveAccount);
-    console.log('          Command: near contract deploy ' + effectiveAccount + ' use-file ' + WASM_PATH + ' without-init-call');
+    console.log('          Command: near contract deploy ' + effectiveAccount + ' use-file ' + RELAY_WASM + ' without-init-call');
     console.log('   [PLAN] Step 4.2: Initialize RELAY contract with default metadata');
     console.log('          Command: near contract call-type ' + effectiveAccount + ' new_default_meta json-args \'{"owner_id":"' + effectiveAccount + '"}\'');
-    console.log('   [PLAN] Step 4.3: Create canonical sub-account ' + canonicalSubaccount);
+    console.log('   [PLAN] Step 4.3: Create and fund canonical sub-account ' + canonicalSubaccount);
     console.log('          Action: Protocol-level CreateAccount from parent ' + effectiveAccount);
-    console.log('          Funding: Initial 0.1 NEAR for account storage');
-    console.log('   [PLAN] Step 4.4: Mint RELAY NFT #' + sampleTokenId + ' bound to ' + canonicalSubaccount);
+    console.log('          Funding: Initial 0.2 NEAR for account and contract storage');
+    console.log('   [PLAN] Step 4.4: Deploy relay_subaccount.wasm to ' + canonicalSubaccount);
+    console.log('          Command: near contract deploy ' + canonicalSubaccount + ' use-file ' + SUBACCOUNT_WASM + ' with-init-call new json-args \'{"parent_contract_id":"' + effectiveAccount + '","token_id":"' + sampleTokenId + '"}\'');
+    console.log('   [PLAN] Step 4.5: Mint RELAY NFT #' + sampleTokenId + ' bound to ' + canonicalSubaccount);
     console.log('          Command: near contract call-type ' + effectiveAccount + ' relay_mint json-args \'{"token_id":"' + sampleTokenId + '","token_owner_id":"' + effectiveAccount + '","token_metadata":{"title":"RELAY #1"},"associated_account_id":"' + canonicalSubaccount + '","initial_credits":3}\'');
-    console.log('   [PLAN] Step 4.5: On-chain Verification Handshake');
-    console.log('          Action: Sub-account ' + canonicalSubaccount + ' invokes relay_verify_associated_account on ' + effectiveAccount);
-    console.log('          Outcome: AccountBinding.is_verified flips to true on-chain.\n');
+    console.log('   [PLAN] Step 4.6: On-chain Verification Handshake');
+    console.log('          Command: near contract call-type ' + canonicalSubaccount + ' register_with_parent json-args \'{}\'');
+    console.log('          Outcome: AccountBinding.is_verified flips to true on parent contract.\n');
 
     if (isDryRun) {
         console.log('====================================================');
@@ -93,9 +115,9 @@ function main() {
         return;
     }
 
-    // Safety guard against accidental live deployment in this reconnaissance/architecture phase
+    // Safety guard against accidental live deployment in this task
     console.log('[SAFETY LOCK] Live testnet deployment is not enabled in this task.');
-    console.log('All acceptance criteria for Task 2 are strictly offline / verifiable simulation.');
+    console.log('All acceptance criteria for Task 3 are strictly offline / verifiable simulation.');
 }
 
 main();

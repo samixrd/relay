@@ -1,6 +1,6 @@
 # RELAY
 
-**RELAY** is a stateful NFT on NEAR intended to be bound to a real NEAR account. Its design target is that its native NEAR balance, attached NEP-171 NFT inventory, and remaining consumable credits stay associated with the same token item across ownership changes. When ownership transfers, the new owner gains authorized control, and the previous owner's RELAY-controlled authority is revoked.
+**RELAY** is a stateful NFT on NEAR intended to be bound to a real NEAR sub-account. Its design target is that its native NEAR balance, attached NEP-171 NFT inventory, and remaining consumable credits stay associated with the same token item across ownership changes. When ownership transfers, the new owner gains authorized control, and the previous owner's RELAY-controlled authority is revoked.
 
 > **Status Notice**: This repository is under active development for the NEAR Hackathon. Features marked as "Verified" are supported by passing automated tests and WASM builds. Features marked as "Planned" or "Unverified" describe the target product goal and are not yet established on a live network.
 
@@ -21,18 +21,54 @@ RELAY builds on concepts established in earlier systems across Web3:
 8. **Verify Persistence**: Associated account balance, attached NFT inventory, and remaining credits persist with the token.
 9. **Verify Authorization**: The new owner can act using the token; the previous owner's access is revoked.
 
+## Architecture & Trust Boundaries
+
+```
+[User / Owner]
+      │
+      │ 1. relay_execute_subaccount(token_id, action)
+      ▼
+┌────────────────────────────────────────────────────────┐
+│  RELAY Core Contract (relay.testnet)                   │
+│  - Verifies caller == nft_token(token_id).owner_id     │
+│  - Atomically locks token: is_token_locked = true      │
+│  - Blocks any concurrent nft_transfer (no TOCTOU race) │
+└──────────────────────────┬─────────────────────────────┘
+                           │
+                           │ 2. execute(action) via cross-contract call
+                           ▼
+┌────────────────────────────────────────────────────────┐
+│  Sub-Account Controller (1.relay.testnet)              │
+│  - Asserts predecessor == parent_contract_id           │
+│  - Rejects all direct user calls (fail closed)         │
+│  - Executes bounded action:                            │
+│      * TransferNear(recipient, amount)                 │
+│      * TransferNep171(nft_contract, recipient, token)  │
+│  - Holds NEP-171 custody via nft_on_transfer           │
+└──────────────────────────┬─────────────────────────────┘
+                           │
+                           │ 3. Callback
+                           ▼
+┌────────────────────────────────────────────────────────┐
+│  RELAY Core Contract (relay.testnet)                   │
+│  - on_subaccount_executed callback releases lock       │
+│  - Unlocks token unconditionally (no deadlock)         │
+└────────────────────────────────────────────────────────┘
+```
+
 ## Implementation & Verification Status
 
 | Component | Status | Verified Capabilities / Evidence |
 |---|---|---|
-| **Repository Scaffolding** | **Verified** | Git version control, npm scripts, Rust contract workspace targeting `wasm32-unknown-unknown`. |
-| **NEP-171 Smart Contract Core** | **Verified** | Implements NEP-171 (Core), NEP-177 (Metadata), NEP-178 (Approval Management), NEP-181 (Enumeration) via `near-contract-standards` 5.30.0. Passing unit tests. |
+| **Repository Scaffolding** | **Verified** | Cargo workspace linking `contract/` and `subaccount/`, npm scripts, WASM compilation. |
+| **NEP-171 Smart Contract Core** | **Verified** | Implements NEP-171 (Core), NEP-177 (Metadata), NEP-178 (Approval Management), NEP-181 (Enumeration) via `near-contract-standards` 5.30.0. 13 passing unit tests in `relay-contract`. |
+| **Sub-Account Controller Contract** | **Verified in Contract** | Companion contract `relay-subaccount` with strict parent-only dispatch, canonical initialization validation, typed bounded execution (`TransferNear`, `TransferNep171`), and `nft_on_transfer` custody receiver. 7 passing unit tests. |
+| **TOCTOU Transfer Coordination** | **Verified in Contract** | Atomically locks token during sub-account operation dispatch. Blocks `nft_transfer` and `nft_transfer_call` while in flight. Unlocks upon callback completion. |
 | **Canonical Sub-account Binding** | **Verified in Contract** | Deterministic canonical derivation enforced: `<token_id>.<contract_id>`. Rejects non-canonical or arbitrary external accounts. |
 | **Bidirectional Handshake Mechanism** | **Verified in Contract** | `AccountBinding` records `{ account_id, is_verified }`. Starts as `false` at mint; flips to `true` strictly when invoked by the sub-account itself via `relay_verify_associated_account`. Unauthorized callers rejected. |
 | **Consumable Credits Engine** | **Verified in Contract** | On-chain credit tracking (`total`, `remaining`). Only current NFT owner can consume credits; decrements atomically; enforces positive balance. |
 | **Live Sub-Account Creation & Handshake** | **Unverified / Planned** | Requires testnet execution where parent account executes `CreateAccount` protocol action. Dry-run planned in `scripts/bootstrap.js`. |
-| **Real Asset Continuity (Balance & Child NFTs)** | **Unverified / Planned** | Contract associates sub-account ID; custody of native NEAR and child NEP-171 inventory inside the sub-account is architecturally designed but pending live chain validation. |
-| **Dynamic Transfer Authorization / Revocation** | **Unverified / Planned** | NFT transfer changes token `owner_id`. Sub-account execution controller to reject previous owner is designed, pending sub-account smart contract deployment. |
+| **Real Asset Continuity on Testnet** | **Unverified / Planned** | Unit tests prove simulated state and promise dispatch; live testnet integration proof required to demonstrate balance and child NFT preservation across owner rotation. |
 | **Google / NEAR Auth (FastAuth)** | **Planned** | MPC-based Google login session and transaction signing flow not yet integrated. |
 | **Web Frontend** | **Planned** | User interface for claiming, redeeming, and transferring. |
 
@@ -43,20 +79,20 @@ RELAY builds on concepts established in earlier systems across Web3:
 - Rust (v1.95+ with `wasm32-unknown-unknown` target)
 - `near-cli-rs` (`near` CLI)
 
-### Build Contract (WASM)
+### Build Contracts (WASM)
 ```bash
 npm run build
-# Compiles contract/src/lib.rs to contract/target/wasm32-unknown-unknown/release/relay_contract.wasm
+# Compiles both relay_contract.wasm (354 KB) and relay_subaccount.wasm (134 KB)
 ```
 
 ### Run Unit Tests
 ```bash
 npm test
-# Executes 9 automated unit tests verifying NEP-171, canonical binding, verification handshake, credit engine, and transfer state.
+# Executes 20 automated unit tests (13 for relay-contract, 7 for relay-subaccount)
 ```
 
 ### Dry-Run Deployment & Bootstrap Simulation
 ```bash
 npm run plan:bootstrap
-# Validates binary artifacts, configuration, and logs step-by-step deployment plan without submitting any network transactions.
+# Validates both binary artifacts, configuration, and logs step-by-step deployment plan without submitting any network transactions.
 ```
