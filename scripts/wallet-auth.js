@@ -197,6 +197,14 @@ function createWalletAuth({
         try {
             return await provider.viewAccount({ accountId });
         } catch (error) {
+            const message = String(error?.message || error);
+            if (fallbackProvider && /deprecated|-429|rate limit|too many requests/i.test(message)) {
+                try {
+                    return await fallbackProvider.viewAccount({ accountId });
+                } catch (fallbackError) {
+                    error = fallbackError;
+                }
+            }
             if (/does not exist|UnknownAccount/i.test(String(error?.message || error))) return null;
             throw error;
         }
@@ -715,7 +723,21 @@ function createWalletAuth({
                 wait_until: 'FINAL',
             });
         } catch (error) {
-            throw failure(`The wallet transaction is not readable on NEAR Testnet: ${error.message}`, 'TRANSACTION_NOT_FOUND', 502);
+            const message = String(error?.message || error);
+            if (fallbackProvider && /deprecated|-429|rate limit|too many requests/i.test(message)) {
+                try {
+                    tx = await fallbackProvider.sendJsonRpc('tx', {
+                        tx_hash: transactionHash,
+                        sender_account_id: identity.accountId,
+                        wait_until: 'FINAL',
+                    });
+                } catch (fallbackError) {
+                    error = fallbackError;
+                }
+            }
+            if (!tx) {
+                throw failure(`The wallet transaction is not readable on NEAR Testnet: ${error.message}`, 'TRANSACTION_NOT_FOUND', 502);
+            }
         }
         const transaction = tx?.transaction;
         if (!transaction) throw failure('The wallet transaction has no readable body.', 'TRANSACTION_UNREADABLE', 502);
