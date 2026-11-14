@@ -740,15 +740,58 @@ async function verifyNep413Signature({
                 finality: 'final',
             },
         };
-        const rpcRes = await fetchImpl(nearRpcUrl, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify(rpcPayload),
-        });
-        if (!rpcRes.ok) {
-            throw failure(`NEAR RPC error checking access keys (${rpcRes.status}).`, 'RPC_ERROR');
+        const candidateUrls = Array.from(new Set([
+            nearRpcUrl,
+            'https://rpc.testnet.near.org',
+            'https://test.rpc.fastnear.com',
+        ].filter(Boolean)));
+
+        let rpcJson = null;
+        let lastStatus = null;
+        for (const url of candidateUrls) {
+            try {
+                const rpcRes = await fetchImpl(url, {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify(rpcPayload),
+                });
+                if (rpcRes.ok) {
+                    const parsed = await rpcRes.json();
+                    if (!parsed.error) {
+                        rpcJson = parsed;
+                        break;
+                    }
+                } else {
+                    lastStatus = rpcRes.status;
+                }
+            } catch {
+                // Try next endpoint on network failure
+            }
         }
-        const rpcJson = await rpcRes.json();
+        if (!rpcJson && lastStatus === 429) {
+            await new Promise((resolve) => setTimeout(resolve, 800));
+            for (const url of ['https://rpc.testnet.near.org', 'https://test.rpc.fastnear.com']) {
+                try {
+                    const rpcRes = await fetchImpl(url, {
+                        method: 'POST',
+                        headers: { 'content-type': 'application/json' },
+                        body: JSON.stringify(rpcPayload),
+                    });
+                    if (rpcRes.ok) {
+                        const parsed = await rpcRes.json();
+                        if (!parsed.error) {
+                            rpcJson = parsed;
+                            break;
+                        }
+                    } else {
+                        lastStatus = rpcRes.status;
+                    }
+                } catch {}
+            }
+        }
+        if (!rpcJson) {
+            throw failure(`NEAR RPC error checking access keys (${lastStatus || 500}).`, 'RPC_ERROR');
+        }
         if (rpcJson.error) {
             throw failure(`Failed to query account access keys: ${rpcJson.error.message || JSON.stringify(rpcJson.error)}`, 'ACCOUNT_KEY_QUERY_FAILED');
         }

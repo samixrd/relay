@@ -9,7 +9,7 @@ services:
       - key: NEAR_NETWORK
         value: testnet
       - key: NEAR_RPC_URL
-        value: https://test.rpc.fastnear.com
+        value: https://rpc.testnet.near.org
       - key: NEAR_EXPLORER_BASE_URL
         value: https://testnet.nearblocks.io
       - key: NEAR_SIGNER_CONTRACT_ID
