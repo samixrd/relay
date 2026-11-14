@@ -112,19 +112,19 @@ function serializeAssociatedAccount(acc) {
     return result;
 }
 
-function localAuthority(value) {
+function localAuthority(value, allowedHost = null) {
     if (typeof value !== 'string' || value.length > 255) return null;
     try {
-        const url = new URL(`http://${value}`);
+        const url = new URL(value.includes('://') ? value : `http://${value}`);
+        const hostname = url.hostname.toLowerCase();
         if (
-            !['127.0.0.1', 'localhost'].includes(url.hostname.toLowerCase()) ||
-            url.username ||
-            url.password ||
-            url.pathname !== '/' ||
-            url.search ||
-            url.hash
-        ) return null;
-        return { hostname: url.hostname.toLowerCase(), port: Number(url.port || 80) };
+            ['127.0.0.1', 'localhost', '0.0.0.0'].includes(hostname) ||
+            (allowedHost && hostname === allowedHost) ||
+            (process.env.RENDER && hostname.endsWith('.onrender.com'))
+        ) {
+            return { hostname, port: Number(url.port || (url.protocol === 'https:' ? 443 : 80)) };
+        }
+        return null;
     } catch {
         return null;
     }
@@ -145,21 +145,29 @@ function normalizeLocalReturnTo(value) {
     }
 }
 
-function isAllowedLocalRequest(request, listeningPort) {
-    const host = localAuthority(request.headers.host);
-    if (!host || host.port !== listeningPort) return false;
+function isAllowedLocalRequest(request, listeningPort, config = null) {
+    let allowedHost = null;
+    const publicUrl = config?.app?.publicAppUrl || process.env.PUBLIC_APP_URL || process.env.RENDER_EXTERNAL_URL;
+    if (publicUrl) {
+        try {
+            allowedHost = new URL(publicUrl).hostname.toLowerCase();
+        } catch {}
+    }
+    const host = localAuthority(request.headers.host, allowedHost);
+    if (!host) return false;
+    const isLocal = ['127.0.0.1', 'localhost', '0.0.0.0'].includes(host.hostname);
+    if (isLocal && listeningPort && host.port !== listeningPort && host.port !== 80 && host.port !== 443) {
+        return false;
+    }
     const originHeader = request.headers.origin;
     if (originHeader === undefined) return true;
     try {
         const origin = new URL(originHeader);
-        const originAuthority = localAuthority(origin.host);
-        return origin.protocol === 'http:' &&
-            origin.pathname === '/' &&
-            !origin.search &&
-            !origin.hash &&
-            originAuthority !== null &&
-            originAuthority.hostname === host.hostname &&
-            originAuthority.port === host.port;
+        const originAuthority = localAuthority(origin.host, allowedHost);
+        if (!originAuthority) return false;
+        if (origin.pathname !== '/' || origin.search || origin.hash) return false;
+        if (originAuthority.hostname !== host.hostname) return false;
+        return true;
     } catch {
         return false;
     }
@@ -737,7 +745,7 @@ function createAppServer({
         response.setHeader('x-frame-options', 'DENY');
         response.setHeader('referrer-policy', 'no-referrer');
         response.setHeader('content-security-policy', "default-src 'none'; frame-ancestors 'none'");
-        if (!isAllowedLocalRequest(request, server.address()?.port)) {
+        if (!isAllowedLocalRequest(request, server.address()?.port, config)) {
             return jsonResponse(response, 403, { error: 'Request must use the local app origin.' });
         }
         let url;
@@ -2386,8 +2394,9 @@ if (require.main === module) {
         process.exitCode = 1;
     } else {
         const server = createAppServer({ config });
-        server.listen(config.app.port, '127.0.0.1', () => {
-            console.log(`RELAY local app listening at http://127.0.0.1:${config.app.port}`);
+        const host = process.env.HOST || '0.0.0.0';
+        server.listen(config.app.port, host, () => {
+            console.log(`RELAY app listening at http://${host}:${config.app.port}`);
             console.log(`NEAR network: ${config.near.network}; contract configured: ${Boolean(config.near.relayContractId)}`);
             console.log('Google sign-in: NEAR Auth (Auth0 + MPC ed25519); gas sponsored by RELAY');
         });

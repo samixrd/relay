@@ -113,10 +113,11 @@ function createConfig(source = process.env) {
     if (env.NEAR_NETWORK !== 'testnet') {
         errors.push('RELAY is a NEAR Testnet product; NEAR_NETWORK must be testnet.');
     }
-    const port = Number(env.APP_PORT);
+    const port = Number(env.PORT || env.APP_PORT);
     if (!Number.isInteger(port) || port < 1 || port > 65535) errors.push('APP_PORT must be between 1 and 65535.');
 
-    const publicAppUrl = env.PUBLIC_APP_URL ? env.PUBLIC_APP_URL.trim() : null;
+    const rawPublic = env.PUBLIC_APP_URL || env.RENDER_EXTERNAL_URL;
+    const publicAppUrl = rawPublic ? rawPublic.trim() : null;
     if (publicAppUrl) {
         try {
             const parsedPublic = new URL(publicAppUrl);
