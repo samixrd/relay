@@ -210,7 +210,7 @@ async function readBinaryBody(request, maxBytes) {
     return Buffer.concat(chunks);
 }
 
-function rpcCall(rpcUrl, method, params, timeoutMs = 10000, fetchImpl = globalThis.fetch) {
+function rpcCall(rpcUrl, method, params, timeoutMs = 12000, fetchImpl = globalThis.fetch) {
     const attempt = (url) => {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -230,12 +230,12 @@ function rpcCall(rpcUrl, method, params, timeoutMs = 10000, fetchImpl = globalTh
     return attempt(rpcUrl).catch(async (error) => {
         const message = String(error?.message || error);
         const fallbackUrl = process.env.RELAY_TEST_RPC_URL || 'https://test.rpc.fastnear.com';
-        // The legacy public Testnet RPC intermittently answers with a
-        // deprecation notice or a 429. Those are endpoint problems, not chain
-        // problems, so retry the same read against a working Testnet RPC.
+        // The public Testnet RPC intermittently answers with a
+        // deprecation notice, 429, or aborts/times out. Those are endpoint problems,
+        // not chain problems, so retry the same read against a working Testnet RPC.
         if (
             fallbackUrl !== rpcUrl &&
-            /deprecated|-429|rate limit|too many requests|HTTP 429/i.test(message)
+            /deprecated|-429|rate limit|too many requests|HTTP 429|aborted|timeout|timed out/i.test(message)
         ) {
             return attempt(fallbackUrl);
         }
@@ -244,7 +244,7 @@ function rpcCall(rpcUrl, method, params, timeoutMs = 10000, fetchImpl = globalTh
 }
 
 async function verifyNearNetwork(config, fetchImpl) {
-    const result = await rpcCall(config.near.rpcUrl, 'status', [], 5000, fetchImpl);
+    const result = await rpcCall(config.near.rpcUrl, 'status', [], 12000, fetchImpl);
     if (result.chain_id !== config.near.network) {
         throw Object.assign(
             new Error(`Configured NEAR RPC reports ${result.chain_id || 'an unknown chain'}; expected ${config.near.network}.`),
