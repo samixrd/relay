@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: relay
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build:near-auth && npm run build:wallet
+    startCommand: npm start
+    envVars:
+      - key: NEAR_NETWORK
+        value: testnet
+      - key: NEAR_RPC_URL
+        value: https://test.rpc.fastnear.com
+      - key: NEAR_EXPLORER_BASE_URL
+        value: https://testnet.nearblocks.io
+      - key: NEAR_SIGNER_CONTRACT_ID
+        value: v1.signer-prod.testnet
+      - key: RELAY_CONTRACT_ID
+        value: relay.spellman.testnet
+      - key: CLAIM_SESSION_SECRET
+        generateValue: true
