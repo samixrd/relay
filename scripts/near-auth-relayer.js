@@ -461,13 +461,33 @@ function createNearAuthRelayer({
         });
     }
 
+    const fallbackRpcUrl = process.env.RELAY_TEST_RPC_URL || 'https://test.rpc.fastnear.com';
+    const fallbackProvider = fallbackRpcUrl && fallbackRpcUrl !== rpcUrl ? new JsonRpcProvider({ url: fallbackRpcUrl }) : null;
+
     async function viewFunction({ contractId, methodName, args }) {
-        return nearProvider.callFunction({
-            contractId,
-            method: methodName,
-            args,
-            blockQuery: { finality: 'final' },
-        });
+        try {
+            return await nearProvider.callFunction({
+                contractId,
+                method: methodName,
+                args,
+                blockQuery: { finality: 'final' },
+            });
+        } catch (error) {
+            const message = String(error?.message || error);
+            if (fallbackProvider && /deprecated|-429|rate limit|too many requests/i.test(message)) {
+                try {
+                    return await fallbackProvider.callFunction({
+                        contractId,
+                        method: methodName,
+                        args,
+                        blockQuery: { finality: 'final' },
+                    });
+                } catch (fallbackError) {
+                    error = fallbackError;
+                }
+            }
+            throw error;
+        }
     }
 
     return {
