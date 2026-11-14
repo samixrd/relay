@@ -24,27 +24,32 @@ RELAY transforms the NFT from a static receipt into a **stateful, sovereign cont
 
 Under RELAY, each NFT minted under the **NEP-171** standard reserves and controls a real, living NEAR **sub-account** at `<token-id>.relay.spellman.testnet`. Deployed directly onto that sub-account is a dedicated Rust WASM controller contract. The controller obeys one master: whoever owns the parent NFT token on the core contract at this exact block height.
 
-```
-┌────────────────────────────────────────────────────────────────────────┐
-│                        RELAY NFT Card (NEP-171)                        │
-│                     Token ID: "linkup" (Dynamic NFT)                   │
-│               Current Owner: Alice (Google MPC or Wallet)              │
-└───────────────────────────────────┬────────────────────────────────────┘
-                                    │ Canonical 1-to-1 Binding
-                                    │ Governs via on-chain controller
-                                    ▼
-┌────────────────────────────────────────────────────────────────────────┐
-│                  NEAR Sub-Account: linkup.relay.spellman.testnet       │
-│                                                                        │
-│   ┌────────────────────────┐             ┌─────────────────────────┐   │
-│   │   Native NEAR Liquid   │             │   NEP-141 Portfolio     │   │
-│   │       1.95 NEAR        │             │   • wNEAR (wrap.testnet)│   │
-│   └────────────────────────┘             │   • AAPL (Apple Test)   │   │
-│   ┌────────────────────────┐             │   • TSLA (Tesla Test)   │   │
-│   │  Subaccount Controller │             │   • GOLD (Gold Test)    │   │
-│   │   WASM (164,590 bytes) │             │   • OIL  (Oil Test)     │   │
-│   └────────────────────────┘             └─────────────────────────┘   │
-└────────────────────────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    classDef card fill:#1b2722,stroke:#d8e64a,stroke-width:2px,color:#f5f4ed;
+    classDef subaccount fill:#212f29,stroke:#52796f,stroke-width:2px,color:#f5f4ed;
+    classDef item fill:#141d19,stroke:#344e41,stroke-width:1px,color:#e0e1dd;
+
+    subgraph NFT_Card ["RELAY NFT Card (NEP-171)"]
+        NFT["Token ID: 'linkup' (Dynamic NFT)<br/>Current Owner: Alice (Google MPC or Wallet)"]:::card
+    end
+
+    subgraph Sub_Account ["NEAR Sub-Account: linkup.relay.spellman.testnet"]
+        WASM["Subaccount Controller WASM<br/>(164,590 bytes)"]:::subaccount
+        
+        subgraph Holdings ["Card Portfolio"]
+            NEAR_BAL["Native NEAR Liquid<br/>1.95 NEAR"]:::item
+            wNEAR["wNEAR (wrap.testnet)"]:::item
+            AAPL["AAPL (Apple Test)"]:::item
+            TSLA["TSLA (Tesla Test)"]:::item
+            GOLD["GOLD (Gold Test)"]:::item
+            OIL["OIL (Crude Oil Test)"]:::item
+        end
+    end
+
+    NFT -->|"Canonical 1-to-1 Binding<br/>Governs via on-chain controller"| WASM
+    WASM --- NEAR_BAL
+    WASM --- Holdings
 ```
 
 #### Why This Changes Everything: Web2-Friendly Onboarding for Real Assets
@@ -163,47 +168,40 @@ Judges and evaluators can verify every claim in the repository using the followi
 
 ## Technical Architecture & Invariants
 
-```
-                             ┌──────────────────────┐
-                             │     Web Browser      │
-                             └──────────┬───────────┘
-                                        │
-             ┌──────────────────────────┴──────────────────────────┐
-             │                                                     │
-             ▼                                                     ▼
-     Google Mode (FastAuth)                                Wallet Mode (NEP-413)
-  • Auth0 RS256 ID Token                                 • Wallet Selector modal
-  • JWT verification against JWKS                        • NEP-413 challenge sign
-  • MPC Key: v1.signer-prod.testnet                      • Curve25519/Ed25519 verify
-  • Gas sponsored by RELAY relayer                       • Self-funded gas
-             │                                                     │
-             └──────────────────────────┬──────────────────────────┘
-                                        │
-                                        ▼
-                     ┌────────────────────────────────────┐
-                     │         RELAY HTTP Relayer         │
-                     │      Borsh Payload Serializer      │
-                     │    Strict Session Cookie Guard     │
-                     └──────────────────┬─────────────────┘
-                                        │ User-Signed Transaction Broadcast
-                                        ▼
-                     ┌────────────────────────────────────┐
-                     │    Core Contract: NEP-171          │
-                     │    relay.spellman.testnet          │
-                     │  • Permissionless self-mint        │
-                     │  • TOCTOU lock coordinator         │
-                     │  • Pull-refund liability ledger    │
-                     └──────────────────┬─────────────────┘
-                                        │ Cross-Contract Promise
-                                        │ execute_subaccount_action
-                                        ▼
-                     ┌────────────────────────────────────┐
-                     │     Subaccount Controller WASM     │
-                     │   <token-id>.relay.spellman.testnet│
-                     │  • Validates caller == parent      │
-                     │  • Preserves 1.65N storage reserve │
-                     │  • Executes typed SubaccountAction │
-                     └────────────────────────────────────┘
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as User / Browser
+    participant Google as Google / Auth0
+    participant MPC as NEAR MPC Signer<br/>(v1.signer-prod.testnet)
+    participant Wallet as NEAR Wallet Selector<br/>(NEP-413)
+    participant Relayer as RELAY Relayer Server
+    participant Core as Core Contract (NEP-171)<br/>(relay.spellman.testnet)
+    participant Sub as Subaccount Controller WASM<br/>(<token>.relay.spellman.testnet)
+
+    alt Google FastAuth Login Flow
+        User->>Google: Authenticate with Google
+        Google-->>User: RS256 ID Token (JWT)
+        User->>MPC: Query derived public key for JWT path
+        MPC-->>User: Ed25519 Public Key
+        User->>Relayer: Verify identity & initialize session
+        Relayer->>Core: Sponsor gas & provision user account
+    else Wallet Selector Flow
+        User->>Wallet: Sign NEP-413 login challenge
+        Wallet-->>User: Signature & FullAccess Public Key
+        User->>Relayer: Verify signature & establish session
+    end
+
+    Note over User,Sub: Stateful Card Operation (e.g. Spend / Transfer / Provision)
+
+    User->>Relayer: Submit user-signed action payload
+    Relayer->>Core: Broadcast transaction (sponsored or direct)
+    Core->>Core: Enforce TOCTOU lock on parent NFT
+    Core->>Sub: Cross-Contract Call (execute_subaccount_action)
+    Sub->>Sub: Verify predecessor == parent contract & reserve ≥ 1.65N
+    Sub-->>Core: Callback with action execution result
+    Core->>Core: Unlock NFT & record finalized state
+    Core-->>User: Finalized block receipt
 ```
 
 ### Core Security Invariants
@@ -273,32 +271,27 @@ A frequent question for stateful NFT accounts is: **Can a RELAY card be used to 
 
 Here is the exact technical roadmap to bring RELAY to Mainnet and enable cross-chain **Universal Checkout**:
 
-```
-┌────────────────────────────────────────────────────────────────────────┐
-│                        RELAY Card on NEAR Mainnet                      │
-│                    Account: <token-id>.relay.near                      │
-│                     Balance: wNEAR (wrap.near)                         │
-└───────────────────────────────────┬────────────────────────────────────┘
-                                    │ 1. Request Intent Quote
-                                    ▼
-┌────────────────────────────────────────────────────────────────────────┐
-│                    NEAR Intents Solver Network                         │
-│               1Click Protocol / Defuse Solver APIs                     │
-│         (@defuse-protocol/one-click-sdk-typescript@0.1.26)             │
-│                                                                        │
-│  • Quote Pair: wrap.near  ──►  Base USDC (or Solana SOL / Arbitrum)   │
-│  • Returns: Ed25519-signed quoteHash + 1Click deposit address          │
-└───────────────────────────────────┬────────────────────────────────────┘
-                                    │ 2. Subaccount dispatches deposit
-                                    │    with quote-bound memo
-                                    ▼
-┌────────────────────────────────────────────────────────────────────────┐
-│                   Cross-Chain Settlement by Solvers                    │
-│                                                                        │
-│  • Solver verifies on-chain deposit on NEAR                            │
-│  • Solver fulfills intent on destination chain                         │
-│  • Merchant receives Base USDC at their native EVM checkout address    │
-└────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    classDef card fill:#1b2722,stroke:#d8e64a,stroke-width:2px,color:#f5f4ed;
+    classDef intent fill:#212f29,stroke:#52796f,stroke-width:2px,color:#f5f4ed;
+    classDef dest fill:#141d19,stroke:#344e41,stroke-width:1px,color:#e0e1dd;
+
+    subgraph Origin ["RELAY Card on NEAR Mainnet"]
+        CardAcc["Account: &lt;token-id&gt;.relay.near<br/>Balance: wNEAR (wrap.near)"]:::card
+    end
+
+    subgraph Solvers ["NEAR Intents Solver Network (1Click / Defuse APIs)"]
+        Solver["1Click Protocol / Defuse Solver APIs<br/>@defuse-protocol/one-click-sdk-typescript<br/>Quote: wrap.near ──► Base USDC / SOL<br/>Returns: Ed25519-signed quoteHash + deposit address"]:::intent
+    end
+
+    subgraph Settlement ["Cross-Chain Settlement by Solvers"]
+        Merchant["Merchant Checkout Address<br/>Receives: Native Base USDC or Solana SOL"]:::dest
+    end
+
+    CardAcc -->|"1. Request Intent Quote"| Solver
+    CardAcc -->|"2. Subaccount dispatches deposit with quote-bound memo"| Solver
+    Solver -->|"3. Fulfills intent on destination chain"| Merchant
 ```
 
 ### 1. Universal Checkout Architecture (How It Works)
