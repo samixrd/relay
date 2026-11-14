@@ -2170,8 +2170,10 @@
       return `<div class="wrap page-top">${pageHead({ kicker: 'Transfer', title: 'Send a card', lede: 'You do not own a card yet.' })}${emptyState({ title: 'Nothing to send', text: 'Create or receive a card first.', action: '<a class="btn btn-primary" href="#/create">Create a card</a>', iconName: 'send' })}</div>`;
     }
     const claims = state.claims || [];
+    const hasUnlinkedWalletCards = (state.owned || []).some((c) => c.token?.ownerId !== googleAccount() && !linkedAccountIds().includes(c.token?.ownerId));
     return `<div class="wrap page-top">
       ${pageHead({ kicker: 'Transfer', title: 'Send a card', lede: 'Choose an email-bound claim with owner approval, or transfer immediately to a NEAR account.' })}
+      ${isAuthed() && !state.links.length && hasUnlinkedWalletCards ? notice('info', 'Owner tip', 'If you own cards across both Google and an external NEAR wallet, bind them in <a class="text-link" href="#/settings">Settings → Linked accounts</a> so you can manage and send all cards seamlessly from either identity.') : ''}
       <div class="split-grid split-grid--even">
         <div class="panel panel-pad">
           <p class="kicker">Email-bound claim</p>
@@ -2576,7 +2578,8 @@
       action = `<button type="button" class="btn btn-primary btn-lg" data-act="approve-claim" data-id="${esc(claim.id)}">${icon('send')} Approve on-chain transfer</button>
         <p class="form-note mt-12">The recipient verified the email. Approving signs the real <code>nft_transfer</code>.</p>`;
     } else if (claim.status === 'ready') {
-      action = notice('info', 'Verified. Waiting for the owner.', 'The recipient email is verified. The card owner must approve the transfer from their account.');
+      const ownerHint = owner ? `<p class="mt-8 small">This card is owned by <code>${esc(owner)}</code>. If that is your external NEAR wallet, connect or bind it in <a class="text-link" href="#/settings">Settings → Linked accounts</a> to approve this transfer.</p>` : '';
+      action = `${notice('info', 'Verified. Waiting for the owner.', `The recipient email is verified. The card owner must approve the transfer from their account.${ownerHint}`)}`;
     } else if (claim.status === 'claimed') {
       action = claim.transactionHash
         ? notice('success', 'Claim complete', `The transfer was finalized on NEAR Testnet. <a class="text-link" href="${esc(explorerTx(claim.transactionHash))}" target="_blank" rel="noreferrer">View transaction</a>`)
