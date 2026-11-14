@@ -333,13 +333,45 @@ function createNearAuthRelayer({
     }
 
     async function sponsorTransaction({ receiverId, actionList, label }) {
-        const signed = await sponsorAccount.createSignedTransaction({ receiverId, actions: actionList });
+        let signed;
+        try {
+            signed = await sponsorAccount.createSignedTransaction({ receiverId, actions: actionList });
+        } catch (error) {
+            const message = String(error?.message || error);
+            if (fallbackProvider && /deprecated|-429|rate limit|too many requests/i.test(message)) {
+                try {
+                    const fallbackSponsor = new Account(sponsorAccountId, fallbackProvider, new KeyPairSigner(sponsorKey));
+                    signed = await fallbackSponsor.createSignedTransaction({ receiverId, actions: actionList });
+                } catch {
+                    throw error;
+                }
+            } else {
+                throw error;
+            }
+        }
         const hash = signed.transaction.hash?.toString?.() || null;
         const encoded = Buffer.from(encodeTransaction(signed)).toString('base64');
-        const result = await nearProvider.sendJsonRpc('send_tx', {
-            signed_tx_base64: encoded,
-            wait_until: 'FINAL',
-        });
+        let result;
+        try {
+            result = await nearProvider.sendJsonRpc('send_tx', {
+                signed_tx_base64: encoded,
+                wait_until: 'FINAL',
+            });
+        } catch (error) {
+            const message = String(error?.message || error);
+            if (fallbackProvider && /deprecated|-429|rate limit|too many requests/i.test(message)) {
+                try {
+                    result = await fallbackProvider.sendJsonRpc('send_tx', {
+                        signed_tx_base64: encoded,
+                        wait_until: 'FINAL',
+                    });
+                } catch {
+                    throw error;
+                }
+            } else {
+                throw error;
+            }
+        }
         if (outcomeFailed(result)) {
             throw failure(`${label} failed on chain.`, 'SPONSOR_TRANSACTION_FAILED');
         }
