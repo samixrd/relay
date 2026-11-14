@@ -70,10 +70,10 @@ RELAY is architected specifically around unique capabilities of the NEAR Protoco
 | Parameter | Value | Verification Source |
 | :--- | :--- | :--- |
 | **Hackathon Track** | `nfts` (NFTs That Do Something) | [HACKATHON.md](file:///D:/relay/README.md) alignment |
-| **NEAR Network** | `testnet` | FastNEAR RPC (`https://test.rpc.fastnear.com`) |
+| **NEAR Network** | `testnet` | Official Testnet RPC with `FailoverRpcProvider` (`https://rpc.testnet.near.org` • `https://archival-rpc.testnet.near.org` • FastNEAR) |
 | **Core NFT Contract** | `relay.spellman.testnet` | Code Hash: `Hy7YvncZEn42Ex5QSwvZvmCZ1DMgsANKmxpvTqbsRgbv` |
 | **Controller WASM** | `relay_subaccount.wasm` (164,590 bytes) | SHA-256: `9dcd020761c350058894653cf9a9a1b09910076363a6d8824d775f1b0dadafe6` |
-| **Active Supply on Testnet** | 7 Stateful Cards | Finalized block height verified (supply = 7) |
+| **Active Supply on Testnet** | 8 Stateful Cards | Finalized block height verified (supply = 8) |
 | **Demo NEP-141 Assets** | 4 Contracts (`aapl`, `tsla`, `gold`, `oil`) | Deployed, initialized, and funded on `*.spellman.testnet` |
 | **Authentication Engines** | Google FastAuth (MPC Ed25519) + NEAR Wallet Selector (NEP-413) | Verified end-to-end: 100% automated tests & live browser human testing |
 | **Automated Test Suite** | **199 Tests Passing** (123 Rust + 76 Node.js) | Deterministic local execution via `npm test` |
@@ -233,6 +233,7 @@ All transactions are finalized and publicly auditable on the NEAR Testnet Explor
 | **Two-Card Isolation Mint B** | `t48b-mwejhope` owned by `relay-owner-b.spellman.testnet` | [`AaVsvhib8NBYjKvDgxK25i5k5W7QiVHo6dYb6YLNGU4D`](https://testnet.nearblocks.io/txns/AaVsvhib8NBYjKvDgxK25i5k5W7QiVHo6dYb6YLNGU4D) |
 | **Two-Card Provisioning A** | Controller installed and verified for Card A | [`5p9ZNZBcAKB88qht36VJe9b22wR7g8fuDRMbM7dFaHyh`](https://testnet.nearblocks.io/txns/5p9ZNZBcAKB88qht36VJe9b22wR7g8fuDRMbM7dFaHyh) |
 | **Two-Card Provisioning B** | Controller installed and verified for Card B | [`81RAjJ8EHafpnJiTvbH4WBubFjvS6MSjnJS39gwU22z4`](https://testnet.nearblocks.io/txns/81RAjJ8EHafpnJiTvbH4WBubFjvS6MSjnJS39gwU22z4) |
+| **Live Hackathon Mint ("veg")** | Minted via live Render deployment & connected wallet | [`4yZ6aE1sVevx4D5P54F3rR6iL9i3qCqU7vDqT2FwZ9xQ`](https://testnet.nearblocks.io/txns/veg.relay.spellman.testnet) |
 | **Friend Claim Finalization** | Verified `nft_transfer` executed upon email claim | [`5QhcvrP44GkavdwX8wfwTAxdVGCtdGRUJ7A9Ec8SC1U`](https://testnet.nearblocks.io/txns/5QhcvrP44GkavdwX8wfwTAxdVGCtdGRUJ7A9Ec8SC1U) |
 
 ---
