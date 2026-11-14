@@ -2322,15 +2322,26 @@ function createAppServer({
                 return jsonResponse(response, 404, { error: 'API route not found.' });
             }
             if ((request.method === 'GET' || request.method === 'HEAD') && url.pathname.startsWith('/uploads/')) {
-                const upload = resolveUploadFile(path.join(ROOT, 'data', 'uploads'), url.pathname);
-                if (!upload) return jsonResponse(response, 404, { error: 'Not found.' });
+                let upload = resolveUploadFile(path.join(ROOT, 'data', 'uploads'), url.pathname);
                 let content;
-                try {
-                    content = await fs.promises.readFile(upload.filePath);
-                } catch (error) {
-                    if (error.code === 'ENOENT') return jsonResponse(response, 404, { error: 'Not found.' });
-                    throw error;
+                if (upload) {
+                    try {
+                        content = await fs.promises.readFile(upload.filePath);
+                    } catch (error) {
+                        if (error.code !== 'ENOENT') throw error;
+                    }
                 }
+                if (!content) {
+                    upload = resolveUploadFile(path.join(WEB_ROOT, 'art'), url.pathname);
+                    if (upload) {
+                        try {
+                            content = await fs.promises.readFile(upload.filePath);
+                        } catch (error) {
+                            if (error.code !== 'ENOENT') throw error;
+                        }
+                    }
+                }
+                if (!content || !upload) return jsonResponse(response, 404, { error: 'Not found.' });
                 response.writeHead(200, {
                     'content-type': upload.contentType,
                     'content-length': content.length,

@@ -157,7 +157,7 @@
     if (!value || typeof value !== 'string') return null;
     try {
       const url = new URL(value, location.origin);
-      if (/^(localhost|127\.0\.0\.1)$/.test(url.hostname) && url.pathname.startsWith('/uploads/')) {
+      if (url.pathname.startsWith('/uploads/')) {
         return `${url.pathname}${url.search}`;
       }
       return url.href;
@@ -1107,12 +1107,10 @@
     const owner = token.ownerId || 'Unresolved';
     const href = options.href || `#/cards/${encodeURIComponent(token.id)}`;
     const compact = options.compact ? ' nft-card--compact' : '';
+    const fallbackArt = `<div class="nft-card__art"><span class="nft-card__art-label">RELAY · NEAR TESTNET</span><span class="nft-card__art-mark"><span>${esc(initials(title))}</span></span></div>`;
     const mediaHtml = media
-      ? `<img src="${esc(media)}" alt="" loading="lazy" onerror="this.closest('.nft-card__media')?.classList.remove('has-image'); this.remove();">`
-      : `<div class="nft-card__art">
-           <span class="nft-card__art-label">RELAY · NEAR TESTNET</span>
-           <span class="nft-card__art-mark"><span>${esc(initials(title))}</span></span>
-         </div>`;
+      ? `<img src="${esc(media)}" alt="" loading="lazy" onerror="const m=this.closest('.nft-card__media'); if(m){ m.classList.remove('has-image'); if(!m.querySelector('.nft-card__art')) m.insertAdjacentHTML('afterbegin', ${JSON.stringify(fallbackArt)}); this.remove(); }">`
+      : fallbackArt;
     return `
       <a class="nft-card${compact}" href="${esc(href)}" aria-label="${esc(title)}">
         <div class="nft-card__media${media ? ' has-image' : ''}">
@@ -1177,8 +1175,15 @@
     return `<span class="net-pill" title="${esc(contract || 'RELAY contract')}"><span class="live-dot"></span> NEAR TESTNET</span>`;
   }
 
+  function testnetBanner() {
+    return `<div class="testnet-banner" style="background: rgba(220, 160, 40, 0.12); color: var(--fg); border-bottom: 1px solid rgba(220, 160, 40, 0.3); font-size: 13px; text-align: center; padding: 6px 16px; font-weight: 500;">
+      <span>⚠️ <strong>NEAR Testnet Mode:</strong> Public RPC nodes may experience intermittent latency or rate limits during finalized block reads.</span>
+    </div>`;
+  }
+
   function publicShell(active, content) {
     return `<div class="public-shell">
+      ${testnetBanner()}
       <header class="public-header">
         <div class="public-header__inner">
           ${brand()}
@@ -1257,6 +1262,7 @@
         </div>
       </aside>
       <div class="app-main">
+        ${testnetBanner()}
         <header class="app-topbar">
           <button type="button" class="menu-button" data-act="open-drawer" aria-label="Open menu">${icon('menu')}</button>
           <div class="app-topbar__crumbs">${esc(crumb || 'RELAY')}<span>/</span>${esc(title)}</div>
