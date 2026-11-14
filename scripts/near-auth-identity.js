@@ -21,10 +21,10 @@
 
 const crypto = require('node:crypto');
 
-const AUTH_DOMAIN = 'login.testnet.fast-auth.com';
+const AUTH_DOMAIN = process.env.NEAR_AUTH_DOMAIN || 'login.testnet.fast-auth.com';
 const AUTH_ISSUER = `https://${AUTH_DOMAIN}/`;
-const AUTH_CLIENT_ID = 'np8paqIpMWmNbzT4xAvOOapZBjsOpptl';
-const AUTH_SIGNING_AUDIENCE = 'auth0.jwt.fast-auth.testnet';
+const AUTH_CLIENT_ID = process.env.NEAR_AUTH_CLIENT_ID || 'np8paqIpMWmNbzT4xAvOOapZBjsOpptl';
+const AUTH_SIGNING_AUDIENCE = process.env.NEAR_AUTH_SIGNING_AUDIENCE || (process.env.NEAR_AUTH_CLIENT_ID ? process.env.NEAR_AUTH_CLIENT_ID : 'auth0.jwt.fast-auth.testnet');
 const AUTH_GUARD_ID = `jwt#https://${AUTH_DOMAIN}/`;
 const FAST_AUTH_CONTRACT_ID = 'fast-auth.testnet';
 const MPC_CONTRACT_ID = 'v1.signer-prod.testnet';
