@@ -2874,9 +2874,13 @@
     render();
 
     const xhr = new XMLHttpRequest();
-    xhr.open('POST', '/api/uploads');
+    const account = sessionAccount();
+    const uploadUrl = account ? `/api/uploads?accountId=${encodeURIComponent(account)}` : '/api/uploads';
+    xhr.open('POST', uploadUrl);
+    xhr.withCredentials = true;
     xhr.setRequestHeader('content-type', file.type || 'application/octet-stream');
     xhr.setRequestHeader('accept', 'application/json');
+    if (account) xhr.setRequestHeader('x-near-account-id', account);
 
     const showProgress = (percent) => {
       state.create.progress = percent;

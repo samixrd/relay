@@ -951,7 +951,16 @@ function createAppServer({
             if (request.method === 'POST' && url.pathname === '/api/uploads') {
                 const googleIdentity = nearAuthApi.readSession(request).session?.nearAuth || null;
                 const walletIdentity = walletAuth.readSession(request).session?.walletAuth || null;
-                const ownerId = googleIdentity?.accountId || walletIdentity?.accountId || null;
+                const headerAccountId = typeof request.headers['x-near-account-id'] === 'string'
+                    ? request.headers['x-near-account-id'].trim().toLowerCase()
+                    : null;
+                const queryAccountId = typeof url.searchParams?.get('accountId') === 'string'
+                    ? url.searchParams.get('accountId').trim().toLowerCase()
+                    : null;
+                const candidateAccount = headerAccountId || queryAccountId;
+                const ownerId = googleIdentity?.accountId
+                    || walletIdentity?.accountId
+                    || (candidateAccount && validateAccountId(candidateAccount) ? candidateAccount : null);
                 if (!ownerId) {
                     return jsonResponse(response, 401, {
                         error: 'Sign in with Google or connect a NEAR wallet before uploading artwork.',
