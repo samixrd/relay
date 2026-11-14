@@ -12,24 +12,23 @@
 
 ## The Story: Why We Built This
 
-### The Problem: Web3 Gifting & Portfolio Ownership is Broken for Real People
-Think about trying to gift crypto, tokenized stocks, or digital commodities to a friend who doesn't use Web3. 
+### The Problem: NFTs Are Static Receipts, Accounts Are Static Silos
+In the traditional Web3 paradigm, non-fungible tokens are largely passive: an entry in a smart contract dictionary mapping a token ID to an owner address and a static JSON metadata URI. They cannot hold money, they cannot execute transactions, and they possess no behavior.
 
-Today, it's an intimidating nightmare:
-1. **The Seed Phrase Barrier:** You have to explain private keys, 12-word seed phrases, gas fees, and browser extensions before they can even receive \$10 of tokenized assets. Most regular people give up on step one.
-2. **Fragmentation & Fee Friction:** If you want to bundle assets together—say, **\$10 in NEAR**, **a share of Apple (AAPL)**, **Tesla (TSLA)**, and **Gold/Oil commodities**—you have to send multiple individual transactions, approve separate token allowances, pay gas for each, and pray your friend knows how to import contract addresses.
-3. **NFTs Are Static Receipts:** Meanwhile, traditional NFTs are just inert dictionary entries pointing to JPEG links. They can't hold a balance, they can't manage tokens, and they can't execute any logic.
+Simultaneously, on-chain identity suffers from a fragmentation problem. If a creator, collector, or autonomous agent wants to gift or sell a curated portfolio—such as a collection of game assets, loyalty passes, and operating funds—they are trapped by one of two terrible options:
+1. **Multi-transaction friction:** Sign dozens of individual token and contract approval transactions, paying gas for each and forcing the receiver to configure multiple balances.
+2. **Private key leakage:** Hand over a seed phrase or private key, destroying trust, auditability, and on-chain security.
 
-### The Solution: An NFT That IS A Living Sovereign Account
-RELAY transforms the NFT from a static receipt into a **smart, stateful vault that anyone with a Google account can own and spend from**.
+### The Solution: An NFT That IS An Account (Sovereign On-Chain Containers)
+RELAY transforms the NFT from a static receipt into a **stateful, sovereign container**. 
 
-Under RELAY, each NFT card minted under **NEP-171** automatically provisions and governs a real, first-class NEAR **sub-account** at `<token-id>.relay.spellman.testnet`. Deployed directly onto that sub-account is a dedicated Rust WASM controller contract. The controller obeys one master: whoever owns the parent NFT token on the core contract at this exact block height.
+Under RELAY, each NFT minted under the **NEP-171** standard reserves and controls a real, living NEAR **sub-account** at `<token-id>.relay.spellman.testnet`. Deployed directly onto that sub-account is a dedicated Rust WASM controller contract. The controller obeys one master: whoever owns the parent NFT token on the core contract at this exact block height.
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│                        RELAY NFT Card (NEP-171)                         │
+│                        RELAY NFT Card (NEP-171)                        │
 │                     Token ID: "linkup" (Dynamic NFT)                   │
-│               Current Owner: Alice (Google MPC or Wallet)               │
+│               Current Owner: Alice (Google MPC or Wallet)              │
 └───────────────────────────────────┬────────────────────────────────────┘
                                     │ Canonical 1-to-1 Binding
                                     │ Governs via on-chain controller
@@ -48,13 +47,16 @@ Under RELAY, each NFT card minted under **NEP-171** automatically provisions and
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-### The Web2 Superpower: Frictionless Onboarding via Verified Email
-With RELAY, you can pre-fund a card with native NEAR, tokenized stocks (AAPL, TSLA), or commodities (Gold, Oil) and send an invite link directly to your friend's Gmail:
-- **No seed phrases. No wallet extensions.**
-- Your friend simply clicks **"Continue with Google"**.
-- Via NEAR FastAuth and Chain Signatures (`v1.signer-prod.testnet`), an MPC Ed25519 signing key is derived deterministically for their verified Google identity.
-- When they claim the card, **the entire sub-account—with all its NEAR, tokenized stocks, and commodities—transfers to their ownership atomically in a single on-chain transaction!**
-- Every balance, claim status, and ownership transition is **100% verified and finalized on NEAR Testnet**.
+#### Why This Changes Everything: Web2-Friendly Onboarding for Real Assets
+With RELAY, everyday Web2 users don't need to know what a seed phrase, gas fee, or RPC endpoint is to receive and own decentralized portfolios. 
+
+1. **Frictionless Google Onboarding:** A user signs in with a standard Google account (`Gmail`). Behind the scenes, NEAR Auth (Auth0 + MPC Ed25519 on `v1.signer-prod.testnet`) derives a non-custodial decentralized NEAR account. RELAY sponsors the creation and storage gas.
+2. **Multi-Asset Portfolio in One Asset:** Instead of having a friend configure multiple token balances and approve multiple contracts, an entire portfolio—containing native NEAR, tokenized stocks (`AAPL`, `TSLA`), and commodities (`GOLD`, `OIL`)—is held directly inside the NFT's sub-account.
+3. **Instant, Atomic Handover:** When the NFT is transferred or claimed via a verified email-bound link:
+   - **Zero seed phrases are shared.**
+   - **Zero individual token transfer transactions are required.**
+   - **The sub-account's complete liquid balance and NEP-141 asset portfolio transfer atomically to the new owner.**
+4. **Ownership with Behavior:** The owner can direct the card account to spend NEAR, transfer tokens, or claim faucets directly from the card account—turning the NFT into an active smart wallet.
 
 ---
 
