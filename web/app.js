@@ -1108,7 +1108,7 @@
     const href = options.href || `#/cards/${encodeURIComponent(token.id)}`;
     const compact = options.compact ? ' nft-card--compact' : '';
     const mediaHtml = media
-      ? `<img src="${esc(media)}" alt="" loading="lazy">`
+      ? `<img src="${esc(media)}" alt="" loading="lazy" onerror="this.closest('.nft-card__media')?.classList.remove('has-image'); this.remove();">`
       : `<div class="nft-card__art">
            <span class="nft-card__art-label">RELAY · NEAR TESTNET</span>
            <span class="nft-card__art-mark"><span>${esc(initials(title))}</span></span>
