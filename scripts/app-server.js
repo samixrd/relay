@@ -2351,11 +2351,12 @@ function createAppServer({
             const acceptsGzip = /\bgzip\b/.test(String(request.headers['accept-encoding'] || ''));
             const compressible = COMPRESSIBLE_EXTENSIONS.has(path.extname(filePath)) && content.length >= 1024;
             let body = content;
+            const auth0Domain = config.rawEnv?.NEAR_AUTH_DOMAIN || process.env.NEAR_AUTH_DOMAIN || 'dev-6lnxwka7c4hvpiou.us.auth0.com';
             const headers = {
                 'content-type': MIME_TYPES[path.extname(filePath)] || 'application/octet-stream',
                 'content-length': content.length,
                 'cache-control': 'no-store',
-                'content-security-policy': "default-src 'self'; connect-src 'self' https://rpc.testnet.near.org https://*.fastnear.com https://login.testnet.fast-auth.com https://*.fast-auth.com https://testnet.mynearwallet.com https://wallet.meteorwallet.app https://*.meteorwallet.app https://*.near.org https://*.near.social; img-src 'self' data: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self'; frame-src https://login.testnet.fast-auth.com https://*.fast-auth.com https://testnet.mynearwallet.com https://wallet.meteorwallet.app; base-uri 'none'; frame-ancestors 'none'",
+                'content-security-policy': `default-src 'self'; connect-src 'self' https://${auth0Domain} https://*.auth0.com https://rpc.testnet.near.org https://*.fastnear.com https://login.testnet.fast-auth.com https://*.fast-auth.com https://testnet.mynearwallet.com https://wallet.meteorwallet.app https://*.meteorwallet.app https://*.near.org https://*.near.social; img-src 'self' data: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self'; frame-src https://${auth0Domain} https://*.auth0.com https://login.testnet.fast-auth.com https://*.fast-auth.com https://testnet.mynearwallet.com https://wallet.meteorwallet.app; base-uri 'none'; frame-ancestors 'none'`,
             };
             if (compressible && acceptsGzip) {
                 body = await compressedStaticContent(filePath, content);
