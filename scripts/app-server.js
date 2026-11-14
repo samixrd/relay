@@ -211,6 +211,14 @@ async function readBinaryBody(request, maxBytes) {
 }
 
 function rpcCall(rpcUrl, method, params, timeoutMs = 12000, fetchImpl = globalThis.fetch) {
+    const candidateUrls = [
+        rpcUrl,
+        'https://rpc.testnet.near.org',
+        'https://archival-rpc.testnet.near.org',
+        process.env.RELAY_TEST_RPC_URL,
+        'https://test.rpc.fastnear.com',
+    ].filter((u, i, arr) => u && arr.indexOf(u) === i);
+
     const attempt = (url) => {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -227,20 +235,18 @@ function rpcCall(rpcUrl, method, params, timeoutMs = 12000, fetchImpl = globalTh
         }).finally(() => clearTimeout(timer));
     };
 
-    return attempt(rpcUrl).catch(async (error) => {
-        const message = String(error?.message || error);
-        const fallbackUrl = process.env.RELAY_TEST_RPC_URL || 'https://test.rpc.fastnear.com';
-        // The public Testnet RPC intermittently answers with a
-        // deprecation notice, 429, or aborts/times out. Those are endpoint problems,
-        // not chain problems, so retry the same read against a working Testnet RPC.
-        if (
-            fallbackUrl !== rpcUrl &&
-            /deprecated|-429|rate limit|too many requests|HTTP 429|aborted|timeout|timed out/i.test(message)
-        ) {
-            return attempt(fallbackUrl);
-        }
-        throw error;
-    });
+    let promise = attempt(candidateUrls[0]);
+    for (let i = 1; i < candidateUrls.length; i++) {
+        const nextUrl = candidateUrls[i];
+        promise = promise.catch(async (error) => {
+            const message = String(error?.message || error);
+            if (/deprecated|-429|rate limit|too many requests|HTTP 429|aborted|timeout|timed out|502|503|504/i.test(message)) {
+                return attempt(nextUrl);
+            }
+            throw error;
+        });
+    }
+    return promise;
 }
 
 async function verifyNearNetwork(config, fetchImpl) {
