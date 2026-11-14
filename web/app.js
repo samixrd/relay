@@ -1774,7 +1774,7 @@
   }
 
   async function cardsMount() {
-    if (!state.cardsLoaded) { await loadCards(); render(); }
+    if (!state.cardsLoaded || state.cardsError) { await loadCards(true); render(); }
   }
   /* ----------------------------------------------------------- card detail -- */
 
