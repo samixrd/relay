@@ -1,0 +1,31 @@
+﻿<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <meta name="theme-color" content="#f5f4ed">
+    <meta name="description" content="RELAY — a transferable NFT card with its own NEAR Testnet account. One Google login, sponsored gas, real on-chain custody.">
+    <title>RELAY — A card that carries an account</title>
+    <link rel="icon" href="/relay-mark.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/styles.css">
+    <link rel="stylesheet" href="/wallet-selector.bundle.css">
+    <script src="/near-wallet-adapter.js" defer></script>
+    <script src="/wallet-selector.bundle.js" defer></script>
+    <script src="/near-auth.bundle.js" defer></script>
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <div id="app" class="app-root">
+      <div class="boot-screen" role="status" aria-live="polite">
+        <img src="/relay-mark.svg" alt="" width="44" height="44">
+        <p class="mono">RELAY</p>
+        <p class="boot-note">Reading NEAR Testnet…</p>
+      </div>
+    </div>
+    <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="false"></div>
+    <div id="dialog-root"></div>
+    <noscript><p class="noscript">RELAY needs JavaScript to read the chain and render the product.</p></noscript>
+  </body>
+</html>

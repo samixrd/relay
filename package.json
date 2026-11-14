@@ -9,9 +9,44 @@
     "build": "cargo build --target wasm32-unknown-unknown --release",
     "test:contract": "cargo test -p relay-contract",
     "test:subaccount": "cargo test -p relay-subaccount",
-    "test": "cargo test",
+    "test:rust": "cargo test",
+    "test:node": "node --test --test-concurrency=1 scripts/near-auth-*.test.js scripts/task48-security.test.js scripts/account-links.test.js scripts/stock-assets.test.js scripts/app-config.test.js scripts/app-server.test.js web/ui-state.test.js",
+    "test": "npm run test:rust && npm run test:node",
+    "test:quotes": "node --test scripts/oneclick-quote-adapter.test.js",
+    "test:preparation": "node --test scripts/oneclick-preparation.test.js",
+    "test:reconciliation": "node --test scripts/oneclick-reconciliation.test.js",
+    "test:near-signer": "node --test scripts/near-testnet-deployment-signer.test.js",
+    "test:app": "node --test scripts/app-config.test.js scripts/app-server.test.js web/ui-state.test.js",
+    "build:wallet": "esbuild web/near-wallet-selector-entry.js --bundle --platform=browser --format=iife --target=es2020 --alias:buffer=buffer --alias:util=util --define:global=globalThis --define:process.env.NODE_ENV=\"\\\"production\\\"\" --inject:web/process-shim.js --inject:web/buffer-shim.js --outfile=web/wallet-selector.bundle.js",
+    "build:near-auth": "esbuild web/near-auth.entry.js --bundle --platform=browser --format=iife --target=es2020 --alias:buffer=buffer --alias:util=util --define:global=globalThis --define:process.env.NODE_ENV=\"\\\"production\\\"\" --inject:web/process-shim.js --inject:web/buffer-shim.js --outfile=web/near-auth.bundle.js",
+    "start": "node scripts/app-server.js",
+    "near:testnet-preflight": "node scripts/near-testnet-deployment-signer.js",
+    "oneclick:quote": "node scripts/request-oneclick-quote.js",
+    "checkout:prepare": "node scripts/prepare-oneclick-checkout.js",
     "plan:bootstrap": "node scripts/bootstrap.js"
   },
-  "keywords": ["near", "nft", "relay"],
+  "dependencies": {
+    "@defuse-protocol/one-click-sdk-typescript": "0.1.26",
+    "@fast-auth-near/browser-sdk": "^1.4.2",
+    "@fast-auth-near/javascript-provider": "^1.4.1",
+    "@near-wallet-selector/core": "10.1.4",
+    "@near-wallet-selector/meteor-wallet": "10.1.4",
+    "@near-wallet-selector/modal-ui-js": "10.1.4",
+    "@near-wallet-selector/my-near-wallet": "10.1.4",
+    "@scure/base": "1.2.6",
+    "buffer": "^6.0.3",
+    "json-stable-stringify": "1.3.0",
+    "near-api-js": "7.4.0",
+    "tweetnacl": "1.0.3",
+    "util": "^0.12.5"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  },
+  "keywords": [
+    "near",
+    "nft",
+    "relay"
+  ],
   "license": "MIT"
 }

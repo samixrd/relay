@@ -89,21 +89,28 @@ function main() {
     console.log('   [OK] Canonical sub-account satisfies NEAR account ID format rules.\n');
 
     // 4. Execution Plan (Dry-Run by default)
-    console.log('4. Execution Plan:');
+    console.log('4. Execution Plan (Dry-Run Plan — No network transactions submitted):');
     console.log('   [PLAN] Step 4.1: Deploy relay_contract.wasm to ' + effectiveAccount);
     console.log('          Command: near contract deploy ' + effectiveAccount + ' use-file ' + RELAY_WASM + ' without-init-call');
     console.log('   [PLAN] Step 4.2: Initialize RELAY contract with default metadata');
     console.log('          Command: near contract call-type ' + effectiveAccount + ' new_default_meta json-args \'{"owner_id":"' + effectiveAccount + '"}\'');
-    console.log('   [PLAN] Step 4.3: Create and fund canonical sub-account ' + canonicalSubaccount);
-    console.log('          Action: Protocol-level CreateAccount from parent ' + effectiveAccount);
-    console.log('          Funding: Initial 0.2 NEAR for account and contract storage');
-    console.log('   [PLAN] Step 4.4: Deploy relay_subaccount.wasm to ' + canonicalSubaccount);
-    console.log('          Command: near contract deploy ' + canonicalSubaccount + ' use-file ' + SUBACCOUNT_WASM + ' with-init-call new json-args \'{"parent_contract_id":"' + effectiveAccount + '","token_id":"' + sampleTokenId + '"}\'');
-    console.log('   [PLAN] Step 4.5: Mint RELAY NFT #' + sampleTokenId + ' bound to ' + canonicalSubaccount);
+    console.log('   [PLAN] Step 4.3: Upload and store controller WASM in parent contract');
+    console.log('          Action: Owner calls store_controller_code with compiled relay_subaccount.wasm');
+    console.log('          Command: near contract call-type ' + effectiveAccount + ' store_controller_code base64-args <subaccount_wasm_bytes> --deposit 1.5');
+    console.log('   [PLAN] Step 4.4: Mint RELAY NFT #' + sampleTokenId + ' bound to canonical ' + canonicalSubaccount);
     console.log('          Command: near contract call-type ' + effectiveAccount + ' relay_mint json-args \'{"token_id":"' + sampleTokenId + '","token_owner_id":"' + effectiveAccount + '","token_metadata":{"title":"RELAY #1"},"associated_account_id":"' + canonicalSubaccount + '","initial_credits":3}\'');
-    console.log('   [PLAN] Step 4.6: On-chain Verification Handshake');
-    console.log('          Command: near contract call-type ' + canonicalSubaccount + ' register_with_parent json-args \'{}\'');
-    console.log('          Outcome: AccountBinding.is_verified flips to true on parent contract.\n');
+    console.log('   [PLAN] Step 4.5: On-Chain Real Sub-Account Provisioning');
+    console.log('          Action: Token owner calls relay_provision_subaccount attached with required storage deposit (~1.6 NEAR)');
+    console.log('          Execution: Parent contract executes atomic Action Receipt on ' + canonicalSubaccount + ':');
+    console.log('                     - CreateAccount');
+    console.log('                     - Transfer(attached_deposit)');
+    console.log('                     - DeployContract(controller_wasm)');
+    console.log('                     - FunctionCall(new, {"parent_contract_id":"' + effectiveAccount + '","token_id":"' + sampleTokenId + '"})');
+    console.log('          Authority: NO FullAccess key created. Control held strictly by deployed controller WASM.');
+    console.log('          Callback: on_provision_complete validates generation nonce & marks binding is_verified = true.');
+    console.log('   [PLAN] Step 4.6: Verify binding status on parent contract');
+    console.log('          Command: near contract call-type ' + effectiveAccount + ' relay_account_binding json-args \'{"token_id":"' + sampleTokenId + '"}\'');
+    console.log('          Outcome: AccountBinding.is_verified == true, ProvisioningState == Completed.\n');
 
     if (isDryRun) {
         console.log('====================================================');

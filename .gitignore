@@ -1,11 +1,10 @@
 # Rust / WASM
-target/
+**/target/
 **/*.rs.bk
 *.wasm
 
 # Node.js
 node_modules/
-package-lock.json
 
 # NEAR
 neardev/
@@ -30,3 +29,14 @@ Thumbs.db
 dist/
 build/
 out/
+
+# Generated browser bundles
+web/wallet-selector.bundle.js
+web/wallet-selector.bundle.css
+web/near-auth.bundle.js
+
+# Logs
+*.log
+
+# Runtime journals and recorded evidence (may contain invitation metadata)
+data/

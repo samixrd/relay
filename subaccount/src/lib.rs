@@ -20,8 +20,10 @@ and child NEP-171 NFTs.
 use near_contract_standards::non_fungible_token::core::NonFungibleTokenReceiver;
 use near_contract_standards::non_fungible_token::TokenId;
 use near_sdk::{
-    env, near, require, AccountId, Gas, NearToken, PanicOnDefault, Promise, PromiseOrValue,
+    env, near, require, AccountId, Gas, NearToken, PanicOnDefault, Promise, PromiseError,
+    PromiseOrValue,
 };
+use near_sdk::json_types::U128;
 
 // ---------------------------------------------------------------------------
 // External Interfaces
@@ -62,6 +64,34 @@ pub enum SubaccountAction {
         receiver_id: AccountId,
         token_id: TokenId,
     },
+    /// Calls ft_transfer on a bounded NEP-141 token contract.
+    TransferNep141 {
+        ft_contract_id: AccountId,
+        receiver_id: AccountId,
+        amount: U128,
+    },
+    /// Calls ft_transfer_call on a bounded NEP-141 token contract.
+    TransferNep141Call {
+        ft_contract_id: AccountId,
+        receiver_id: AccountId,
+        amount: U128,
+        msg: String,
+    },
+    /// Registers this sub-account for NEP-141 storage at a token contract so it
+    /// can receive and later transfer that token.
+    RegisterNep141 {
+        ft_contract_id: AccountId,
+        storage_deposit: NearToken,
+    },
+}
+
+#[near(serializers = [json])]
+#[derive(Clone, Debug, PartialEq)]
+pub enum PaymentExecutionResult {
+    TransferSucceeded,
+    TransferFailed,
+    TransferCallResolved { amount_used: U128 },
+    RecoveryRequired,
 }
 
 // ---------------------------------------------------------------------------
@@ -75,6 +105,23 @@ pub struct SubaccountController {
     parent_contract_id: AccountId,
     /// The specific token ID this sub-account is bound to.
     token_id: TokenId,
+}
+
+#[near_sdk::ext_contract(ext_ft_contract)]
+pub trait ExtFungibleToken {
+    fn ft_transfer(&mut self, receiver_id: AccountId, amount: U128, memo: Option<String>);
+    fn ft_transfer_call(
+        &mut self,
+        receiver_id: AccountId,
+        amount: U128,
+        memo: Option<String>,
+        msg: String,
+    ) -> PromiseOrValue<U128>;
+    fn storage_deposit(
+        &mut self,
+        account_id: Option<AccountId>,
+        registration_only: Option<bool>,
+    ) -> PromiseOrValue<near_sdk::serde_json::Value>;
 }
 
 // ---------------------------------------------------------------------------
@@ -148,6 +195,186 @@ impl SubaccountController {
                     .nft_transfer(receiver_id, token_id, None, None)
                     .into()
             }
+            SubaccountAction::RegisterNep141 {
+                ft_contract_id,
+                storage_deposit,
+            } => {
+                require!(
+                    storage_deposit.as_yoctonear() >= 1
+                        && storage_deposit <= NearToken::from_millinear(100),
+                    "NEP-141 storage deposit must be between 1 yoctoNEAR and 0.1 NEAR"
+                );
+                require!(
+                    ft_contract_id != env::current_account_id(),
+                    "Token contract cannot be the associated account"
+                );
+                let storage_reserve = env::storage_byte_cost()
+                    .as_yoctonear()
+                    .saturating_mul(env::storage_usage() as u128);
+                let available = env::account_balance()
+                    .as_yoctonear()
+                    .saturating_sub(storage_reserve);
+                require!(
+                    available >= storage_deposit.as_yoctonear(),
+                    "Insufficient available balance for NEP-141 storage registration"
+                );
+                ext_ft_contract::ext(ft_contract_id)
+                    .with_attached_deposit(storage_deposit)
+                    .with_static_gas(Gas::from_tgas(20))
+                    .storage_deposit(None, Some(true))
+                    .then(
+                        Self::ext(env::current_account_id())
+                            .with_static_gas(Gas::from_tgas(5))
+                            .noop(),
+                    )
+                    .into()
+            }
+            SubaccountAction::TransferNep141 { .. }
+            | SubaccountAction::TransferNep141Call { .. } => {
+                env::panic_str("NEP-141 payments must use execute_payment")
+            }
+        }
+    }
+
+    /// Internal callback used to normalize controller results to unit.
+    ///
+    /// The parent contract's `on_subaccount_executed` callback decodes a unit
+    /// result. Actions whose downstream call returns a value (for example
+    /// NEP-141 `storage_deposit`, which returns `true`) resolve through this
+    /// private method so the parent callback always receives empty bytes.
+    #[private]
+    pub fn noop(&self) {}
+
+    /// Executes one fixed NEP-141 transfer method for the bound parent contract.
+    ///
+    /// A transfer-call result is classified from the token's standard resolver
+    /// return value; errors after dispatch remain recovery-required.
+    pub fn execute_payment(
+        &mut self,
+        ft_contract_id: AccountId,
+        receiver_id: AccountId,
+        amount: U128,
+        transfer_call: bool,
+        msg: String,
+    ) -> Promise {
+        require!(
+            env::predecessor_account_id() == self.parent_contract_id,
+            "Unauthorized: Only the parent RELAY contract can dispatch payments"
+        );
+        require!(
+            ft_contract_id != env::current_account_id(),
+            "Token contract cannot be the associated account"
+        );
+        require!(
+            receiver_id != env::current_account_id(),
+            "Receiver cannot be the associated account"
+        );
+        require!(amount.0 > 0, "Payment amount must be positive");
+        require!(msg.len() <= 1024, "Payment message exceeds 1024 bytes");
+        let storage_reserve =
+            env::storage_byte_cost().as_yoctonear() * env::storage_usage() as u128;
+        let available_near = env::account_balance()
+            .as_yoctonear()
+            .saturating_sub(storage_reserve);
+        require!(
+            available_near >= NearToken::from_yoctonear(1).as_yoctonear(),
+            "Insufficient NEAR above storage reserve for required 1 yoctoNEAR payment deposit"
+        );
+
+        if transfer_call {
+            ext_ft_contract::ext(ft_contract_id)
+                .with_attached_deposit(NearToken::from_yoctonear(1))
+                .with_static_gas(Gas::from_tgas(55))
+                .ft_transfer_call(receiver_id, amount, None, msg)
+                .then(
+                    Self::ext(env::current_account_id())
+                        .with_static_gas(Gas::from_tgas(10))
+                        .on_nep141_transfer_call(),
+                )
+        } else {
+            ext_ft_contract::ext(ft_contract_id)
+                .with_attached_deposit(NearToken::from_yoctonear(1))
+                .with_static_gas(Gas::from_tgas(30))
+                .ft_transfer(receiver_id, amount, None)
+                .then(
+                    Self::ext(env::current_account_id())
+                        .with_static_gas(Gas::from_tgas(10))
+                        .on_nep141_transfer(),
+                )
+        }
+    }
+
+    /// Executes the exact NEP-141 origin-chain deposit selected by the parent.
+    ///
+    /// Unlike `execute_payment`, this path forwards the provider-bound deposit memo
+    /// as the NEP-141 transfer memo and never uses `ft_transfer_call`.
+    pub fn execute_nep141_deposit(
+        &mut self,
+        ft_contract_id: AccountId,
+        receiver_id: AccountId,
+        amount: U128,
+        deposit_memo: Option<String>,
+    ) -> Promise {
+        require!(
+            env::predecessor_account_id() == self.parent_contract_id,
+            "Unauthorized: Only the parent RELAY contract can dispatch deposits"
+        );
+        require!(
+            ft_contract_id != env::current_account_id(),
+            "Token contract cannot be the associated account"
+        );
+        require!(
+            receiver_id != env::current_account_id(),
+            "Receiver cannot be the associated account"
+        );
+        require!(amount.0 > 0, "Deposit amount must be positive");
+        if let Some(memo) = &deposit_memo {
+            require!(
+                !memo.is_empty() && memo.len() <= 1024,
+                "Deposit memo must contain 1 to 1024 bytes"
+            );
+        }
+
+        let storage_reserve =
+            env::storage_byte_cost().as_yoctonear() * env::storage_usage() as u128;
+        let available_near = env::account_balance()
+            .as_yoctonear()
+            .saturating_sub(storage_reserve);
+        require!(
+            available_near >= NearToken::from_yoctonear(1).as_yoctonear(),
+            "Insufficient NEAR above storage reserve for required 1 yoctoNEAR payment deposit"
+        );
+
+        ext_ft_contract::ext(ft_contract_id)
+            .with_attached_deposit(NearToken::from_yoctonear(1))
+            .with_static_gas(Gas::from_tgas(30))
+            .ft_transfer(receiver_id, amount, deposit_memo)
+            .then(
+                Self::ext(env::current_account_id())
+                    .with_static_gas(Gas::from_tgas(10))
+                    .on_nep141_transfer(),
+            )
+    }
+
+    #[private]
+    pub fn on_nep141_transfer(
+        &mut self,
+        #[callback_result] result: Result<(), PromiseError>,
+    ) -> PaymentExecutionResult {
+        match result {
+            Ok(()) => PaymentExecutionResult::TransferSucceeded,
+            Err(_) => PaymentExecutionResult::TransferFailed,
+        }
+    }
+
+    #[private]
+    pub fn on_nep141_transfer_call(
+        &mut self,
+        #[callback_result] result: Result<U128, PromiseError>,
+    ) -> PaymentExecutionResult {
+        match result {
+            Ok(amount_used) => PaymentExecutionResult::TransferCallResolved { amount_used },
+            Err(_) => PaymentExecutionResult::RecoveryRequired,
         }
     }
 
@@ -161,6 +388,10 @@ impl SubaccountController {
 
     pub fn get_token_id(&self) -> TokenId {
         self.token_id.clone()
+    }
+
+    pub fn get_controller_state(&self) -> (AccountId, TokenId) {
+        (self.parent_contract_id.clone(), self.token_id.clone())
     }
 
     pub fn get_native_balance(&self) -> NearToken {
@@ -357,6 +588,111 @@ mod tests {
             PromiseOrValue::Promise(_) => {}
             _ => panic!("Expected PromiseOrValue::Promise"),
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "Unauthorized: Only the parent RELAY contract can dispatch payments")]
+    fn test_execute_payment_rejects_unauthorized_direct_caller() {
+        let parent = accounts(0);
+        let token_id = "relay-1".to_string();
+        let subaccount: AccountId = format!("{}.{}", token_id, parent).parse().unwrap();
+
+        let mut context = get_context(subaccount.clone(), parent.clone());
+        testing_env!(context.build());
+        let mut contract = SubaccountController::new(parent, token_id);
+
+        testing_env!(context.predecessor_account_id(accounts(1)).build());
+        let _ = contract.execute_payment(
+            accounts(2),
+            accounts(3),
+            U128(10),
+            true,
+            "fixture".to_string(),
+        );
+    }
+
+    #[test]
+    fn test_execute_nep141_deposit_forwards_memo_with_one_yocto() {
+        let parent = accounts(0);
+        let token_id = "relay-1".to_string();
+        let subaccount: AccountId = format!("{}.{}", token_id, parent).parse().unwrap();
+        let mut context = get_context(subaccount.clone(), parent.clone());
+        testing_env!(context
+            .account_balance(NearToken::from_near(10))
+            .build());
+        let mut contract = SubaccountController::new(parent.clone(), token_id);
+
+        testing_env!(context
+            .predecessor_account_id(parent)
+            .account_balance(NearToken::from_near(10))
+            .build());
+        let _ = contract.execute_nep141_deposit(
+            "wrap.near".parse().unwrap(),
+            accounts(3),
+            U128(42),
+            Some("quote-bound-memo".to_string()),
+        );
+
+        let receipts = near_sdk::test_utils::get_created_receipts();
+        let transfer = receipts
+            .iter()
+            .flat_map(|receipt| receipt.actions.iter())
+            .find_map(|action| match action {
+                near_sdk::mock::MockAction::FunctionCallWeight {
+                    method_name,
+                    args,
+                    attached_deposit,
+                    ..
+                } if method_name == b"ft_transfer" => {
+                    Some((args, attached_deposit.as_yoctonear()))
+                }
+                _ => None,
+            })
+            .expect("deposit must create an ft_transfer receipt");
+        let args: near_sdk::serde_json::Value =
+            near_sdk::serde_json::from_slice(transfer.0).unwrap();
+        assert_eq!(args["receiver_id"], accounts(3).as_str());
+        assert_eq!(args["amount"], "42");
+        assert_eq!(args["memo"], "quote-bound-memo");
+        assert_eq!(transfer.1, 1);
+    }
+
+    #[test]
+    fn test_execute_nep141_deposit_preserves_absent_memo() {
+        let parent = accounts(0);
+        let token_id = "relay-1".to_string();
+        let subaccount: AccountId = format!("{}.{}", token_id, parent).parse().unwrap();
+        let mut context = get_context(subaccount.clone(), parent.clone());
+        testing_env!(context
+            .account_balance(NearToken::from_near(10))
+            .build());
+        let mut contract = SubaccountController::new(parent.clone(), token_id);
+
+        testing_env!(context
+            .predecessor_account_id(parent)
+            .account_balance(NearToken::from_near(10))
+            .build());
+        let _ = contract.execute_nep141_deposit(
+            "wrap.near".parse().unwrap(),
+            accounts(3),
+            U128(42),
+            None,
+        );
+
+        let receipts = near_sdk::test_utils::get_created_receipts();
+        let transfer = receipts
+            .iter()
+            .flat_map(|receipt| receipt.actions.iter())
+            .find_map(|action| match action {
+                near_sdk::mock::MockAction::FunctionCallWeight {
+                    method_name, args, ..
+                } if method_name == b"ft_transfer" => Some(args),
+                _ => None,
+            })
+            .expect("deposit must create an ft_transfer receipt");
+        let args: near_sdk::serde_json::Value =
+            near_sdk::serde_json::from_slice(transfer).unwrap();
+        assert!(args["memo"].is_null());
     }
 
     #[test]
