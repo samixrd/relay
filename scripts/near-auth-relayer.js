@@ -458,7 +458,17 @@ function createNearAuthRelayer({
         if (!accessKey) {
             throw failure('The user account is not ready for signing yet (missing key).', 'USER_KEY_MISSING');
         }
-        const block = await nearProvider.viewBlock({ finality: 'final' });
+        let block;
+        try {
+            block = await nearProvider.viewBlock({ finality: 'final' });
+        } catch (error) {
+            const message = String(error?.message || error);
+            if (fallbackProvider && /deprecated|-429|rate limit|too many requests/i.test(message)) {
+                block = await fallbackProvider.viewBlock({ finality: 'final' });
+            } else {
+                throw error;
+            }
+        }
         const transaction = createTransaction(
             signerId,
             PublicKey.from(key),
@@ -518,10 +528,27 @@ function createNearAuthRelayer({
             signature: new Signature({ keyType: KeyType.ED25519, data: signature.signature }),
         });
         const encoded = Buffer.from(encodeTransaction(signedTransaction)).toString('base64');
-        const result = await nearProvider.sendJsonRpc('send_tx', {
-            signed_tx_base64: encoded,
-            wait_until: 'FINAL',
-        });
+        let result;
+        try {
+            result = await nearProvider.sendJsonRpc('send_tx', {
+                signed_tx_base64: encoded,
+                wait_until: 'FINAL',
+            });
+        } catch (error) {
+            const message = String(error?.message || error);
+            if (fallbackProvider && /deprecated|-429|rate limit|too many requests/i.test(message)) {
+                try {
+                    result = await fallbackProvider.sendJsonRpc('send_tx', {
+                        signed_tx_base64: encoded,
+                        wait_until: 'FINAL',
+                    });
+                } catch {
+                    throw error;
+                }
+            } else {
+                throw error;
+            }
+        }
         return {
             transactionHash: baseEncode(crypto.createHash('sha256').update(bytes).digest()),
             signTransactionHash: signature.transactionHash,
