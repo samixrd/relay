@@ -271,12 +271,32 @@ function createNearAuthRelayer({
     const sponsorPublicKey = sponsorKey.getPublicKey().toString();
     const sponsor = budget || new SponsorBudget({ now });
 
+    const fallbackRpcUrl = process.env.RELAY_TEST_RPC_URL || 'https://test.rpc.fastnear.com';
+    const fallbackProvider = fallbackRpcUrl && fallbackRpcUrl !== rpcUrl ? new JsonRpcProvider({ url: fallbackRpcUrl }) : null;
+
     async function sendSigned(signedTransaction, label) {
         const encoded = Buffer.from(encodeTransaction(signedTransaction)).toString('base64');
-        const result = await nearProvider.sendJsonRpc('send_tx', {
-            signed_tx_base64: encoded,
-            wait_until: 'FINAL',
-        });
+        let result;
+        try {
+            result = await nearProvider.sendJsonRpc('send_tx', {
+                signed_tx_base64: encoded,
+                wait_until: 'FINAL',
+            });
+        } catch (error) {
+            const message = String(error?.message || error);
+            if (fallbackProvider && /deprecated|-429|rate limit|too many requests/i.test(message)) {
+                try {
+                    result = await fallbackProvider.sendJsonRpc('send_tx', {
+                        signed_tx_base64: encoded,
+                        wait_until: 'FINAL',
+                    });
+                } catch {
+                    throw error;
+                }
+            } else {
+                throw error;
+            }
+        }
         return { result, label, transactionHash: signedTransaction.transaction.hash?.toString?.() || null };
     }
 
@@ -285,6 +305,14 @@ function createNearAuthRelayer({
         try {
             return await nearProvider.viewAccount({ accountId });
         } catch (error) {
+            const message = String(error?.message || error);
+            if (fallbackProvider && /deprecated|-429|rate limit|too many requests/i.test(message)) {
+                try {
+                    return await fallbackProvider.viewAccount({ accountId });
+                } catch (fallbackError) {
+                    error = fallbackError;
+                }
+            }
             if (/does not exist|UnknownAccount/i.test(String(error?.message || error))) return null;
             throw error;
         }
@@ -293,7 +321,13 @@ function createNearAuthRelayer({
     async function getAccessKey(accountId, publicKey) {
         try {
             return await nearProvider.viewAccessKey({ accountId, publicKey });
-        } catch {
+        } catch (error) {
+            const message = String(error?.message || error);
+            if (fallbackProvider && /deprecated|-429|rate limit|too many requests/i.test(message)) {
+                try {
+                    return await fallbackProvider.viewAccessKey({ accountId, publicKey });
+                } catch {}
+            }
             return null;
         }
     }
@@ -460,9 +494,6 @@ function createNearAuthRelayer({
             waitUntil: 'FINAL',
         });
     }
-
-    const fallbackRpcUrl = process.env.RELAY_TEST_RPC_URL || 'https://test.rpc.fastnear.com';
-    const fallbackProvider = fallbackRpcUrl && fallbackRpcUrl !== rpcUrl ? new JsonRpcProvider({ url: fallbackRpcUrl }) : null;
 
     async function viewFunction({ contractId, methodName, args }) {
         try {
