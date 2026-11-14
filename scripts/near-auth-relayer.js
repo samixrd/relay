@@ -24,6 +24,7 @@ const crypto = require('node:crypto');
 const nacl = require('tweetnacl');
 const {
     Account,
+    FailoverRpcProvider,
     JsonRpcProvider,
     KeyPair,
     KeyPairSigner,
@@ -262,7 +263,19 @@ function createNearAuthRelayer({
         throw failure('A valid sponsor account ID is required.', 'SPONSOR_ACCOUNT');
     }
     const sponsorKey = normalizePrivateKey(sponsorPrivateKey);
-    const nearProvider = provider || new JsonRpcProvider({ url: rpcUrl });
+    const candidateUrls = [
+        rpcUrl,
+        'https://rpc.testnet.near.org',
+        'https://archival-rpc.testnet.near.org',
+        process.env.RELAY_TEST_RPC_URL,
+        'https://test.rpc.fastnear.com',
+    ].filter((u, i, arr) => u && arr.indexOf(u) === i);
+
+    const nearProvider = provider || (
+        candidateUrls.length > 1
+            ? new FailoverRpcProvider(candidateUrls.map((u) => new JsonRpcProvider({ url: u })))
+            : new JsonRpcProvider({ url: rpcUrl })
+    );
     // near-api-js v7 expects a `Signer` (something with `signTransaction`),
     // not a bare KeyPair: passing the KeyPair threw
     // "TypeError: signer.signTransaction is not a function" on every sponsored

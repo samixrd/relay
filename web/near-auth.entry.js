@@ -16,11 +16,10 @@
 import './buffer-shim.js';
 import { JavascriptProvider } from '@fast-auth-near/javascript-provider';
 import { Buffer } from 'buffer';
-import { JsonRpcProvider, decodeTransaction } from 'near-api-js';
+import { FailoverRpcProvider, JsonRpcProvider, decodeTransaction } from 'near-api-js';
 
 let provider = null;
 let rpc = null;
-let fallbackRpc = null;
 let options = null;
 
 function decodeBase64(value) {
@@ -51,9 +50,15 @@ async function initialize(config) {
         domain: options.domain,
         signingAudience: options.signingAudience,
     });
-    rpc = new JsonRpcProvider({ url: options.rpcUrl });
-    const fallbackUrl = options.rpcUrl.includes('fastnear') ? 'https://rpc.testnet.near.org' : 'https://test.rpc.fastnear.com';
-    fallbackRpc = new JsonRpcProvider({ url: fallbackUrl });
+
+    const candidates = [
+        options.rpcUrl,
+        'https://rpc.testnet.near.org',
+        'https://archival-rpc.testnet.near.org',
+        'https://test.rpc.fastnear.com',
+    ].filter((u, i, arr) => u && arr.indexOf(u) === i);
+
+    rpc = new FailoverRpcProvider(candidates.map((url) => new JsonRpcProvider({ url })));
     return isLoggedIn();
 }
 
@@ -88,21 +93,7 @@ async function getIdentity() {
         },
         blockQuery: { finality: 'final' },
     };
-    let derived;
-    try {
-        derived = await rpc.callFunction(callArgs);
-    } catch (err) {
-        const msg = String(err?.message || err);
-        if (fallbackRpc && /deprecated|-429|rate limit|too many requests/i.test(msg)) {
-            try {
-                derived = await fallbackRpc.callFunction(callArgs);
-            } catch (fallbackErr) {
-                throw err;
-            }
-        } else {
-            throw err;
-        }
-    }
+    const derived = await rpc.callFunction(callArgs);
     const publicKey = typeof derived === 'string' ? derived : derived?.public_key;
     if (typeof publicKey !== 'string') {
         throw new Error('The MPC contract did not return a signing key.');
