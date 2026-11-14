@@ -508,7 +508,7 @@ function createNearAuthApi({
             const description = typeof body.description === 'string' ? body.description.trim() : '';
             if (description.length > 500) throw failure('Description must be at most 500 characters.', 'METADATA');
             const media = typeof body.imageUrl === 'string' ? body.imageUrl.trim() : '';
-            if (media && !/^(?:https:\/\/|\/uploads\/[a-z0-9-]+\.(?:png|jpe?g|webp))$/i.test(media)) {
+            if (media && !/^(?:https:\/\/[^\s]+|\/uploads\/[a-z0-9-]+\.(?:png|jpe?g|webp))$/i.test(media)) {
                 throw failure('Image URL must be an uploaded RELAY image or an HTTPS URL.', 'METADATA');
             }
             const initialCredits = body.initialCredits === undefined ? 3 : Number(body.initialCredits);

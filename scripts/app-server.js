@@ -1006,7 +1006,7 @@ function createAppServer({
                     return jsonResponse(response, 400, { error: 'Description must be at most 500 characters.' });
                 }
                 const media = typeof body.imageUrl === 'string' ? body.imageUrl.trim() : '';
-                if (media && !/^(?:https:\/\/|\/uploads\/[a-z0-9-]+\.(?:png|jpe?g|webp))$/i.test(media)) {
+                if (media && !/^(?:https:\/\/[^\s]+|\/uploads\/[a-z0-9-]+\.(?:png|jpe?g|webp))$/i.test(media)) {
                     return jsonResponse(response, 400, { error: 'Image URL must be an uploaded RELAY image path or an HTTPS URL.' });
                 }
                 const initialCredits = body.initialCredits === undefined ? 3 : Number(body.initialCredits);
