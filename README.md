@@ -6,7 +6,7 @@
 > **Network:** NEAR Testnet (`testnet`)  
 > **Verification Status:** 100% On-Chain Verified • 199 Automated Tests Passing
 
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/samixrd/relay)
+> **Live Demo:** [https://relay-1vc9.onrender.com](https://relay-1vc9.onrender.com)
 
 ---
 
